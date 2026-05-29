@@ -137,72 +137,57 @@ def familia_producto(txt: str) -> str:
 
     return t
 
-def normalizar_nombre_columna(col: str) -> str:
-    c = limpiar(col).lower()
-    c = c.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u").replace("ñ", "n")
-    c = re.sub(r"[^a-z0-9]+", "_", c).strip("_")
-    alias = {
-        "cod": "codigo",
-        "codigo_producto": "codigo",
-        "codigo_articulo": "codigo",
-        "cod_producto": "codigo",
-        "producto_codigo": "codigo",
-        "cod_cilbrake": "codigo",
-        "codigo_cilbrake": "codigo",
-        "descripcion": "producto",
-        "desc": "producto",
-        "familia_producto": "producto",
-        "marca_vehiculo": "marca",
-        "marcavehiculo": "marca",
-        "modelo_vehiculo": "modelo",
-        "modelovehiculo": "modelo",
-        "ano": "anio",
-        "año": "anio",
-        "anio_modelo": "anio",
-        "imagen": "imagen_producto",
-        "imagen_url": "imagen_producto",
-        "image": "imagen_producto",
-        "url": "url_ficha",
-        "link": "url_ficha",
-        "ficha": "url_ficha",
-        "ro": "oem",
-        "referencia": "oem",
-        "referencias": "oem",
-        "cross": "oem",
-        "equivalencias": "oem",
-        "oem_referencia": "oem",
-        "boca_chica_mm": "boca_chica",
-        "boca_grande_mm": "boca_grande",
-        "largo_mm": "largo",
-        "diametro_interior": "diametro_int",
-        "diametro_exterior": "diametro_ext",
-        "diam_int": "diametro_int",
-        "diam_ext": "diametro_ext",
-        "int": "diametro_int",
-        "ext": "diametro_ext",
-        "alt": "altura",
-    }
-    return alias.get(c, c)
-
 def read_csv_any(path: str) -> pd.DataFrame:
-    """Lee CSV detectando separador y normalizando encabezados."""
-    last_error = None
-    for sep in [None, ",", ";", "\t", "|"]:
+    """Lee CSV sin romper los otros proveedores.
+    Prueba separadores y elige el que realmente trae columnas conocidas.
+    """
+    candidatos = []
+    for sep in [",", ";", "\t", "|"]:
         try:
-            kwargs = {"dtype": str, "encoding": "utf-8-sig"}
-            if sep is None:
-                kwargs.update({"sep": None, "engine": "python"})
-            else:
-                kwargs.update({"sep": sep})
-            df = pd.read_csv(path, **kwargs).fillna("")
-            # Si quedó todo en una sola columna, probablemente no era ese separador.
-            if len(df.columns) <= 1 and sep not in [None, ";"]:
-                continue
-            df.columns = [normalizar_nombre_columna(c) for c in df.columns]
-            return df
-        except Exception as e:
-            last_error = e
-    raise last_error
+            df = pd.read_csv(path, dtype=str, sep=sep, encoding="utf-8-sig").fillna("")
+            raw_cols = list(df.columns)
+            norm_cols = [normalizar_nombre_columna(c) for c in raw_cols]
+            conocidos = {
+                "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
+                "ficha_medidas", "ficha_oem", "ficha_info", "imagen_producto",
+                "url_ficha", "fuente", "familia", "boca_chica", "boca_grande",
+                "largo", "posicion", "lado", "diametro_int", "diametro_ext", "altura",
+            }
+            score = sum(1 for c in norm_cols if c in conocidos)
+            # Penaliza los casos donde todo queda como una sola columna gigante.
+            if len(df.columns) <= 1:
+                score -= 100
+            # Premia si trae código con datos.
+            if "codigo" in norm_cols:
+                try:
+                    col_codigo = raw_cols[norm_cols.index("codigo")]
+                    if df[col_codigo].astype(str).str.strip().ne("").any():
+                        score += 20
+                except Exception:
+                    pass
+            candidatos.append((score, len(df.columns), df))
+        except Exception:
+            continue
+
+    if not candidatos:
+        return pd.read_csv(path, dtype=str, encoding="utf-8-sig").fillna("")
+
+    candidatos.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return candidatos[0][2].fillna("")
+
+
+def consolidar_columnas_normalizadas(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza encabezados y une columnas duplicadas como ficha_info / ficha_info.1."""
+    salida = pd.DataFrame(index=df.index)
+    for col in df.columns:
+        base = re.sub(r"\.\d+$", "", str(col))
+        nuevo = normalizar_nombre_columna(base)
+        serie = df[col].astype(str).fillna("").map(limpiar)
+        if nuevo in salida.columns:
+            salida[nuevo] = salida[nuevo].where(salida[nuevo].astype(str).str.strip().ne(""), serie)
+        else:
+            salida[nuevo] = serie
+    return salida
 
 def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, filename)
@@ -210,20 +195,13 @@ def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.Dat
         return pd.DataFrame(columns=columns)
 
     df = read_csv_any(path)
-    df.columns = [normalizar_nombre_columna(c) for c in df.columns]
-
-    # Si el código vino en una variante de nombre, lo dejamos siempre como codigo.
-    posibles_codigos = [c for c in df.columns if c in ["codigo", "cod", "cod_articulo", "codigo_producto", "codigo_articulo"]]
-    if "codigo" not in df.columns and posibles_codigos:
-        df["codigo"] = df[posibles_codigos[0]]
-
     for col in columns:
         if col not in df.columns:
             df[col] = ""
 
     df = df[columns].copy()
-    # La fuente se conoce por el archivo; se fuerza para evitar CSV corridos o valores dañados.
-    df["fuente"] = fuente
+    df["fuente"] = df["fuente"].replace("", fuente)
+    df.loc[df["fuente"].eq(""), "fuente"] = fuente
     return df
 
 @st.cache_data(show_spinner="Cargando catálogo MIPOL...")
@@ -326,9 +304,9 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
     return df[df["fuente_norm"].eq(norm(catalogo))].copy()
 
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
-    vals = select_options(df, "fuente")
-    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT"]
-    return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
+    # Mostrar siempre todos los proveedores configurados.
+    # Así no desaparece SERRAT u otro proveedor por un problema de cache/lectura parcial.
+    return list(FUENTES.keys())
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     es_dauer = False
