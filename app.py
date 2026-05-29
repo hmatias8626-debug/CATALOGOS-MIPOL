@@ -8,6 +8,50 @@ st.set_page_config(page_title="Catálogo MIPOL", page_icon="🔎", layout="wide"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 
+FUENTES = {
+    "TIPER": ("aplicaciones.csv", "fichas.csv"),
+    "WEGA": ("wega_aplicaciones.csv", "wega_fichas.csv"),
+    "VTH": ("vth_aplicaciones.csv", "vth_fichas.csv"),
+    "DAUER": ("dauer_aplicaciones.csv", "dauer_fichas.csv"),
+}
+
+TECNICAS = [
+    "estrias_externas", "estrias_internas", "estrias_lado_rueda", "estrias_lado_caja",
+    "longitud_semieje", "longitud_cardan", "longitud_punta_eje",
+    "diametro_asiento", "diametro_asiento_lado_rueda",
+    "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
+    "altura_jh", "altura_punta_eje",
+    "diametro_circunferencia_agujeros", "rosca_agujeros",
+    "diametro_rodamiento", "diametro_menor",
+    "abs", "posicion_seguro", "seguro", "lado", "peso", "dimensiones",
+]
+
+NOMBRES_TECNICAS = {
+    "estrias_externas": "Estrías externas",
+    "estrias_internas": "Estrías internas",
+    "estrias_lado_rueda": "Estrías lado rueda",
+    "estrias_lado_caja": "Estrías lado caja",
+    "longitud_semieje": "Longitud semieje",
+    "longitud_cardan": "Longitud cardan",
+    "longitud_punta_eje": "Longitud punta eje",
+    "diametro_asiento": "Diám. asiento",
+    "diametro_asiento_lado_rueda": "Diám. asiento lado rueda",
+    "diametro_jh": "Diám. JH",
+    "diametro_junta_homocinetica": "Diám. junta homocinética",
+    "diametro_jh_deslizante": "Diám. JH deslizante",
+    "altura_jh": "Altura JH",
+    "altura_punta_eje": "Altura punta eje",
+    "diametro_circunferencia_agujeros": "Diám. circ. agujeros",
+    "rosca_agujeros": "Rosca agujeros",
+    "diametro_rodamiento": "Diám. rodamiento",
+    "diametro_menor": "Diám. menor",
+    "abs": "ABS",
+    "posicion_seguro": "Posición seguro",
+    "seguro": "Seguro",
+    "lado": "Lado",
+    "peso": "Peso",
+    "dimensiones": "Dimensiones",
+}
 
 def norm(txt: str) -> str:
     txt = str(txt or "").upper()
@@ -20,10 +64,8 @@ def norm(txt: str) -> str:
         txt = txt.replace(a, b)
     return re.sub(r"[^A-Z0-9]+", "", txt)
 
-
 def limpiar(txt: str) -> str:
-    return re.sub(r"\s+", " ", str(txt or "")).strip()
-
+    return re.sub(r"\s+", " ", str(txt or "").replace("\ufeff", "")).strip()
 
 def familia_producto(txt: str) -> str:
     t = limpiar(txt).upper()
@@ -37,14 +79,8 @@ def familia_producto(txt: str) -> str:
         ("EXTREMO", ["EXTREMO"]),
         ("AXIAL", ["AXIAL"]),
         ("PARRILLA", ["PARRILLA", "BANDEJA"]),
-        ("BUJE DE BARRA ESTABILIZADORA", ["BUJEDEBARRAESTABILIZADORA", "BARRAESTABILIZADORA"]),
-        ("BUJE EJE TRASERO", ["BUJEEJETRASERO", "EJETRASERO"]),
         ("BUJE", ["BUJE"]),
-        ("FUELLE", ["FUELLE"]),
-        ("TOPE DE AMORTIGUADOR", ["TOPEDEAMORTIGUADOR"]),
-        ("TOPE", ["TOPE"]),
         ("BRAZO", ["BRAZO"]),
-        ("SOPORTE DE MOTOR", ["SOPORTEDEMOTOR", "SOPORTEMOTOR"]),
         ("SOPORTE", ["SOPORTE"]),
         ("CAZOLETA", ["CAZOLETA"]),
         ("CRAPODINA", ["CRAPODINA"]),
@@ -61,6 +97,14 @@ def familia_producto(txt: str) -> str:
         ("CAJA AUTOMATICA", ["CAJAAUTOMATICA", "CAJAAUTOMÁTICA"]),
         ("ACCESORIOS", ["ACCESORIOS"]),
         ("KITS", ["KITS", "KIT"]),
+
+        # DAUER / transmisión
+        ("EJE CARDANICO", ["EJECARDANICO", "CARDAN"]),
+        ("SEMIEJE", ["SEMIEJE"]),
+        ("JUNTA HOMOCINETICA", ["JUNTAHOMOCINETICA", "HOMOCINETICA"]),
+        ("JUNTA DESLIZANTE", ["JUNTADESLIZANTE", "DESLIZANTE"]),
+        ("PUNTA DE EJE", ["PUNTADEEJE"]),
+        ("TRICETA", ["TRICETA"]),
     ]
 
     for familia, palabras in reglas:
@@ -69,13 +113,19 @@ def familia_producto(txt: str) -> str:
 
     return t
 
+def read_csv_any(path: str) -> pd.DataFrame:
+    """Lee CSV normal; si viene separado por ; también lo detecta."""
+    try:
+        return pd.read_csv(path, dtype=str).fillna("")
+    except Exception:
+        return pd.read_csv(path, dtype=str, sep=";").fillna("")
 
 def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
         return pd.DataFrame(columns=columns)
 
-    df = pd.read_csv(path, dtype=str).fillna("")
+    df = read_csv_any(path)
     for col in columns:
         if col not in df.columns:
             df[col] = ""
@@ -85,30 +135,27 @@ def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.Dat
     df.loc[df["fuente"].eq(""), "fuente"] = fuente
     return df
 
-
 @st.cache_data(show_spinner="Cargando catálogo MIPOL...")
 def load_data():
     app_cols = [
         "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
         "ficha_medidas", "ficha_oem", "ficha_info",
-        "imagen_producto", "url_ficha", "fuente"
-    ]
+        "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
+    ] + TECNICAS
+
     ficha_cols = [
         "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem",
-        "ficha_medidas", "imagen_producto", "url_ficha", "fuente"
-    ]
+        "ficha_medidas", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
+    ] + TECNICAS
 
-    aplicaciones = pd.concat([
-        read_csv_if_exists("aplicaciones.csv", app_cols, "TIPER"),
-        read_csv_if_exists("wega_aplicaciones.csv", app_cols, "WEGA"),
-        read_csv_if_exists("vth_aplicaciones.csv", app_cols, "VTH"),
-    ], ignore_index=True)
+    aplicaciones_lista = []
+    fichas_lista = []
+    for fuente, (archivo_app, archivo_ficha) in FUENTES.items():
+        aplicaciones_lista.append(read_csv_if_exists(archivo_app, app_cols, fuente))
+        fichas_lista.append(read_csv_if_exists(archivo_ficha, ficha_cols, fuente))
 
-    fichas = pd.concat([
-        read_csv_if_exists("fichas.csv", ficha_cols, "TIPER"),
-        read_csv_if_exists("wega_fichas.csv", ficha_cols, "WEGA"),
-        read_csv_if_exists("vth_fichas.csv", ficha_cols, "VTH"),
-    ], ignore_index=True)
+    aplicaciones = pd.concat(aplicaciones_lista, ignore_index=True)
+    fichas = pd.concat(fichas_lista, ignore_index=True)
 
     for df in (aplicaciones, fichas):
         for col in df.columns:
@@ -126,13 +173,11 @@ def load_data():
 
     return aplicaciones, fichas
 
-
 def contains_norm(series: pd.Series, term: str) -> pd.Series:
     t = norm(term)
     if not t:
         return pd.Series(True, index=series.index)
     return series.astype(str).map(norm).str.contains(t, na=False)
-
 
 def text_search(df: pd.DataFrame, query: str, cols: list[str]) -> pd.Series:
     q = norm(query)
@@ -146,13 +191,11 @@ def text_search(df: pd.DataFrame, query: str, cols: list[str]) -> pd.Series:
     joined = df[available_cols].astype(str).agg(" ".join, axis=1).map(norm)
     return joined.str.contains(q, na=False)
 
-
 def select_options(df: pd.DataFrame, col: str) -> list[str]:
     if col not in df.columns:
         return []
     vals = [limpiar(v) for v in df[col].dropna().astype(str).unique() if limpiar(v)]
     return sorted(set(vals), key=lambda x: norm(x))
-
 
 def filtrar_por_display(df: pd.DataFrame, col: str, value: str, todos: str) -> pd.Series:
     if value == todos or col not in df.columns:
@@ -162,26 +205,33 @@ def filtrar_por_display(df: pd.DataFrame, col: str, value: str, todos: str) -> p
         return df[norm_col].eq(norm(value))
     return df[col].map(norm).eq(norm(value))
 
+def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
+    if catalogo in ["Todos", "Ambos"]:
+        return df
+    return df[df["fuente_norm"].eq(norm(catalogo))].copy()
+
+def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
+    vals = select_options(df, "fuente")
+    orden = ["TIPER", "WEGA", "VTH", "DAUER"]
+    return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     if modo == "Aplicaciones":
         cols = [
             "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
             "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
-            "imagen_producto", "url_ficha"
-        ]
+        ] + TECNICAS + ["imagen_producto", "url_ficha"]
     else:
         cols = [
             "fuente", "codigo", "familia", "producto", "ficha_anio",
             "ficha_info", "ficha_oem", "ficha_medidas",
-            "imagen_producto", "url_ficha"
-        ]
+        ] + TECNICAS + ["imagen_producto", "url_ficha"]
 
-    cols = [c for c in cols if c in res.columns]
-    out = res[cols].copy()
-    out = out.drop_duplicates()
-    return out
+    cols = [c for c in cols if c in res.columns and (res[c].astype(str).str.strip().ne("").any() or c in ["fuente", "codigo", "familia", "producto", "marca", "modelo"])]
+    out = res[cols].copy().drop_duplicates()
 
+    rename = {c: NOMBRES_TECNICAS[c] for c in TECNICAS if c in out.columns}
+    return out.rename(columns=rename)
 
 def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
     st.markdown(f"### {titulo}")
@@ -210,24 +260,34 @@ def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
         },
     )
 
-
 aplicaciones, fichas = load_data()
 
 st.title("🔎 Catálogo MIPOL")
-st.caption("Buscador interno con datos TIPER + WEGA + VTH. Mismos filtros, resultados separados por catálogo cuando hace falta.")
+st.caption("Buscador interno con datos por proveedor. Los filtros se ajustan al catálogo seleccionado.")
 
 with st.sidebar:
     st.header("Filtros")
     modo = st.radio("Buscar por", ["Aplicaciones", "Fichas/códigos"], horizontal=False)
 
     base_df = aplicaciones if modo == "Aplicaciones" else fichas
+    disponibles = fuentes_disponibles(base_df)
+    opciones_catalogo = ["Todos"] + disponibles
 
-    q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, 5872, bieleta...")
-    codigo = st.text_input("Código", placeholder="Ej: 30003, WR-110, FAP2827, 5872")
+    # IMPORTANTE: primero se elige proveedor; después recién se arman productos/marcas/modelos.
+    catalogo = st.radio(
+        "Proveedor",
+        opciones_catalogo,
+        horizontal=False,
+        help="Si elegís TIPER, solo aparecen productos/marcas/modelos de TIPER. No se mezclan filtros con WEGA, VTH o DAUER.",
+    )
+
+    base_filtrada = filtrar_fuente(base_df, catalogo)
+
+    q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, semieje, 22 estrías...")
+    codigo = st.text_input("Código", placeholder="Ej: 30003, WR-110, ECA-AD0001")
     oem = st.text_input("OEM / referencia", placeholder="Ej: 68105872AA, 90486296")
 
-    # Cascada simple para que no muestre familias que después no pueden devolver nada.
-    df_opciones = base_df.copy()
+    df_opciones = base_filtrada.copy()
 
     producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"))
     if producto != "Todos":
@@ -243,22 +303,24 @@ with st.sidebar:
         marca = "Todas"
         modelo = "Todos"
 
-
 df = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
+df = filtrar_fuente(df, catalogo)
 
 mask = pd.Series(True, index=df.index)
+
+search_cols_tecnicas = TECNICAS + ["titulo", "categoria"]
 
 if q:
     if modo == "Aplicaciones":
         mask &= text_search(df, q, [
             "codigo", "producto", "familia", "marca", "modelo", "anio",
-            "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info", "fuente"
-        ])
+            "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info", "fuente",
+        ] + search_cols_tecnicas)
     else:
         mask &= text_search(df, q, [
             "codigo", "producto", "familia", "ficha_anio",
-            "ficha_info", "ficha_oem", "ficha_medidas", "fuente"
-        ])
+            "ficha_info", "ficha_oem", "ficha_medidas", "fuente",
+        ] + search_cols_tecnicas)
 
 if codigo:
     mask &= contains_norm(df["codigo"], codigo)
@@ -280,32 +342,20 @@ if modo == "Aplicaciones":
 
 res = df[mask].copy()
 
-st.markdown("#### Catálogo a mostrar")
-catalogo = st.radio(
-    "Elegí qué resultados querés ver",
-    ["Todos", "TIPER", "WEGA", "VTH"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
-
-fuentes = ["TIPER", "WEGA", "VTH"]
-
-if catalogo in fuentes:
-    res_cat = res[res["fuente_norm"].eq(catalogo)].copy()
-    st.subheader(f"Resultados {catalogo}: {len(res_cat):,}".replace(",", "."))
-    mostrar_bloque(catalogo, res_cat, modo)
-
+if catalogo != "Todos":
+    st.subheader(f"Resultados {catalogo}: {len(res):,}".replace(",", "."))
+    mostrar_bloque(catalogo, res, modo)
 else:
-    bloques = [(fuente, res[res["fuente_norm"].eq(fuente)].copy()) for fuente in fuentes]
-    total = sum(len(df_bloque) for _, df_bloque in bloques)
+    total = len(res)
     st.subheader(f"Resultados totales: {total:,}".replace(",", "."))
-    for idx, (fuente, df_bloque) in enumerate(bloques):
-        if idx > 0:
+    for fuente in disponibles:
+        bloque = res[res["fuente_norm"].eq(norm(fuente))].copy()
+        if not bloque.empty:
+            mostrar_bloque(fuente, bloque, modo)
             st.divider()
-        mostrar_bloque(fuente, df_bloque, modo)
 
 st.divider()
 st.markdown("""
-**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Por ejemplo,
-`WR-110`, `WR110`, `BA 046`, `BA-046` y `BA046` se tratan parecido.
+**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. También busca en medidas técnicas cuando existen:
+estrías, longitud, diámetro, lado, ABS, seguro, etc.
 """)

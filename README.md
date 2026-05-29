@@ -1,18 +1,35 @@
-# Catálogo TIPER - Streamlit
+# Actualización Catálogo MIPOL - DAUER
 
-App interna para consultar el catálogo TIPER scrapeado.
+Incluye:
 
-## Ejecutar local
+- `app.py` actualizado.
+- `data/dauer_aplicaciones.csv`
+- `data/dauer_fichas.csv`
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+Cambios principales:
 
-## Subir a Streamlit Community Cloud
+1. DAUER separado en columnas técnicas:
+   - estrias_externas
+   - estrias_internas
+   - estrias_lado_rueda
+   - estrias_lado_caja
+   - longitud_semieje
+   - longitud_cardan
+   - diametro_jh
+   - lado
+   - abs
+   - seguro
+   - posicion_seguro
+   - etc.
 
-1. Subir estos archivos a un repositorio de GitHub.
-2. En Streamlit Community Cloud, crear una nueva app.
-3. Elegir el repositorio y usar `app.py` como archivo principal.
+2. Los filtros ya no se mezclan entre proveedores:
+   - Primero elegís proveedor: Todos, TIPER, WEGA, VTH o DAUER.
+   - Después recién se cargan Producto, Marca y Modelo según ese proveedor.
 
-El archivo `requirements.txt` debe quedar en la raíz del repo.
+## Subida a GitHub
+
+- Reemplazar `app.py`.
+- Subir los CSV dentro de la carpeta `data`.
+- Commit.
+- Push.
+- Reboot app en Streamlit Cloud.
