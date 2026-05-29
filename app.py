@@ -18,12 +18,43 @@ def load_data():
             df[col] = df[col].astype(str).fillna("").str.strip()
         if "codigo" in df.columns:
             df["codigo"] = df["codigo"].str.replace(r"\.0$", "", regex=True)
+        if "producto" in df.columns:
+            df["familia"] = df["producto"].apply(familia_producto)
     return aplicaciones, fichas
 
 def norm(txt: str) -> str:
     txt = str(txt or "").upper()
     txt = txt.replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
     return re.sub(r"[^A-Z0-9]+", "", txt)
+
+def familia_producto(txt: str) -> str:
+    t = str(txt or "").upper().strip()
+    t_norm = norm(t)
+
+    reglas = [
+        ("ROTULA DE SUSPENSION", ["ROTULA"]),
+        ("PRECAP", ["PRECAP"]),
+        ("BIELETA", ["BIELETA"]),
+        ("EXTREMO", ["EXTREMO"]),
+        ("AXIAL", ["AXIAL"]),
+        ("PARRILLA", ["PARRILLA", "BANDEJA"]),
+        ("BUJE", ["BUJE"]),
+        ("BRAZO", ["BRAZO"]),
+        ("SOPORTE", ["SOPORTE"]),
+        ("CAZOLETA", ["CAZOLETA"]),
+        ("CRAPODINA", ["CRAPODINA"]),
+        ("AMORTIGUADOR", ["AMORTIGUADOR"]),
+        ("ESPIRAL", ["ESPIRAL"]),
+        ("KIT", ["KIT"]),
+    ]
+
+    for familia, palabras in reglas:
+        for palabra in palabras:
+            if palabra in t_norm:
+                return familia
+
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 def contains_norm(series: pd.Series, term: str) -> pd.Series:
     t = norm(term)
@@ -55,7 +86,7 @@ with st.sidebar:
     q = st.text_input("Búsqueda general", placeholder="Ej: Ecosport, 30003, 52128517AA, bieleta...")
     codigo = st.text_input("Código TIPER", placeholder="Ej: 30003")
     oem = st.text_input("OEM / referencia", placeholder="Ej: 68105872AA")
-    producto = st.selectbox("Producto", ["Todos"] + select_options(aplicaciones if modo == "Aplicaciones" else fichas, "producto"))
+    producto = st.selectbox("Producto", ["Todos"] + select_options(aplicaciones if modo == "Aplicaciones" else fichas, "familia"))
 
 if modo == "Aplicaciones":
     df = aplicaciones.copy()
@@ -70,7 +101,7 @@ if modo == "Aplicaciones":
     if oem:
         mask &= text_search(df, oem, ["oem", "ficha_oem"])
     if producto != "Todos":
-        mask &= df["producto"].eq(producto)
+        mask &= df["familia"].eq(producto)
     if marca != "Todas":
         mask &= df["marca"].eq(marca)
     if modelo != "Todos":
@@ -97,7 +128,7 @@ else:
     if oem:
         mask &= contains_norm(df["ficha_oem"], oem)
     if producto != "Todos":
-        mask &= df["producto"].eq(producto)
+        mask &= df["familia"].eq(producto)
     res = df[mask].copy()
     st.subheader(f"Resultados: {len(res):,}".replace(",", "."))
     st.dataframe(
