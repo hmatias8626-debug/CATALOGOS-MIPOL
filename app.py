@@ -138,11 +138,11 @@ def familia_producto(txt: str) -> str:
     return t
 
 def read_csv_any(path: str) -> pd.DataFrame:
-    """Lee CSV normal; si viene separado por ; también lo detecta."""
-    try:
-        return pd.read_csv(path, dtype=str).fillna("")
-    except Exception:
-        return pd.read_csv(path, dtype=str, sep=";").fillna("")
+    """Lee CSV detectando separador común (, o ;)."""
+    df = pd.read_csv(path, dtype=str, sep=None, engine="python").fillna("")
+    # Limpia BOM/espacios en nombres de columnas, típico cuando viene de Excel.
+    df.columns = [limpiar(c) for c in df.columns]
+    return df
 
 def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, filename)
@@ -351,7 +351,11 @@ with st.sidebar:
     modo = st.radio("Buscar por", ["Aplicaciones", "Fichas/códigos"], horizontal=False)
 
     base_df = aplicaciones if modo == "Aplicaciones" else fichas
-    disponibles = fuentes_disponibles(base_df)
+
+    # Lista fija desde FUENTES: así los proveedores aparecen aunque el CSV esté vacío,
+    # aunque Streamlit tenga caché vieja o aunque todavía no haya resultados cargados.
+    # Antes dependía de los datos ya cargados y por eso SERRAT podía no mostrarse.
+    disponibles = list(FUENTES.keys())
     opciones_catalogo = ["Todos"] + disponibles
 
     # IMPORTANTE: primero se elige proveedor; después recién se arman productos/marcas/modelos.
