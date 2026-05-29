@@ -14,6 +14,7 @@ FUENTES = {
     "VTH": ("vth_aplicaciones.csv", "vth_fichas.csv"),
     "DAUER": ("dauer_aplicaciones.csv", "dauer_fichas.csv"),
     "CILBRAKE": ("cilbrake_aplicaciones.csv", "cilbrake_fichas.csv"),
+    "SERRAT": ("serrat_aplicaciones.csv", "serrat_fichas.csv"),
 }
 
 TECNICAS = [
@@ -25,7 +26,7 @@ TECNICAS = [
     "diametro_circunferencia_agujeros", "rosca_agujeros",
     "diametro_rodamiento", "diametro_menor",
     "pieza", "posicion", "diametro_int", "diametro_ext", "altura",
-    "abs", "posicion_seguro", "lado", "peso", "dimensiones",
+    "abs", "posicion_seguro", "lado", "boca_chica", "boca_grande", "largo", "peso", "dimensiones",
 ]
 
 AUX_TECNICAS = [
@@ -59,6 +60,9 @@ NOMBRES_TECNICAS = {
     "abs": "ABS",
     "posicion_seguro": "Seguro",
     "lado": "Lado",
+    "boca_chica": "Boca chica",
+    "boca_grande": "Boca grande",
+    "largo": "Largo",
     "peso": "Peso",
     "dimensiones": "Dimensiones",
 }
@@ -124,6 +128,7 @@ def familia_producto(txt: str) -> str:
         ("JUNTA DESLIZANTE", ["JUNTADESLIZANTE", "DESLIZANTE"]),
         ("PUNTA DE EJE", ["PUNTADEEJE"]),
         ("TRICETA", ["TRICETA"]),
+        ("FUELLE", ["FUELLE"]),
     ]
 
     for familia, palabras in reglas:
@@ -255,16 +260,18 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
 
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
     vals = select_options(df, "fuente")
-    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE"]
+    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT"]
     return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     es_dauer = False
     es_cilbrake = False
+    es_serrat = False
     if not res.empty and "fuente_norm" in res.columns:
         fuentes = set(res["fuente_norm"].dropna().astype(str).unique())
         es_dauer = fuentes == {"DAUER"}
         es_cilbrake = fuentes == {"CILBRAKE"}
+        es_serrat = fuentes == {"SERRAT"}
 
     if modo == "Aplicaciones":
         if es_cilbrake:
@@ -277,13 +284,19 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info",
             ] + TECNICAS + ["imagen_producto", "url_ficha", "oem"]
+        elif es_serrat:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
+                "info", "boca_chica", "boca_grande", "largo", "posicion", "lado",
+                "imagen_producto", "url_ficha", "oem"
+            ]
         else:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
     else:
-        if es_dauer or es_cilbrake:
+        if es_dauer or es_cilbrake or es_serrat:
             cols = [
                 "fuente", "codigo", "familia", "producto", "ficha_anio",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
@@ -438,6 +451,38 @@ with st.sidebar:
         rod_posicion_sel = "Todos"
         rod_lado_sel = "Todos"
 
+    # Filtros técnicos de fuelles. Aparecen para cualquier proveedor
+    # cuando la familia seleccionada es FUELLE.
+    if producto == "FUELLE":
+        st.divider()
+        st.subheader("Medidas fuelle")
+        boca_chica_sel = st.selectbox(
+            "Boca chica",
+            ["Todos"] + select_options_tecnico(df_opciones, "boca_chica"),
+        )
+        boca_grande_sel = st.selectbox(
+            "Boca grande",
+            ["Todos"] + select_options_tecnico(df_opciones, "boca_grande"),
+        )
+        largo_sel = st.selectbox(
+            "Largo",
+            ["Todos"] + select_options_tecnico(df_opciones, "largo"),
+        )
+        fuelle_posicion_sel = st.selectbox(
+            "Posición",
+            ["Todos"] + select_options_tecnico(df_opciones, "posicion"),
+        )
+        fuelle_lado_sel = st.selectbox(
+            "Lado",
+            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
+        )
+    else:
+        boca_chica_sel = "Todos"
+        boca_grande_sel = "Todos"
+        largo_sel = "Todos"
+        fuelle_posicion_sel = "Todos"
+        fuelle_lado_sel = "Todos"
+
 df = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
 df = filtrar_fuente(df, catalogo)
 
@@ -489,6 +534,13 @@ if producto == "RODAMIENTO":
     mask &= filtrar_tecnico(df, "posicion", rod_posicion_sel)
     mask &= filtrar_tecnico(df, "lado", rod_lado_sel)
 
+if producto == "FUELLE":
+    mask &= filtrar_tecnico(df, "boca_chica", boca_chica_sel)
+    mask &= filtrar_tecnico(df, "boca_grande", boca_grande_sel)
+    mask &= filtrar_tecnico(df, "largo", largo_sel)
+    mask &= filtrar_tecnico(df, "posicion", fuelle_posicion_sel)
+    mask &= filtrar_tecnico(df, "lado", fuelle_lado_sel)
+
 res = df[mask].copy()
 
 if catalogo != "Todos":
@@ -505,5 +557,5 @@ else:
 
 st.divider()
 st.markdown("""
-**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Los cross/equivalencias se buscan desde Búsqueda general u OEM/referencia. Si elegís una familia técnica como RODAMIENTO, aparecen filtros por medidas.
+**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Los cross/equivalencias se buscan desde Búsqueda general u OEM/referencia. Si elegís una familia técnica como RODAMIENTO o FUELLE, aparecen filtros por medidas.
 """)

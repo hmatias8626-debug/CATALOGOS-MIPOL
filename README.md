@@ -1,35 +1,29 @@
-# Actualización Catálogo MIPOL - DAUER
+# Actualización Catálogo MIPOL - SERRAT Fuelles
 
-Incluye:
+Archivos incluidos:
 
-- `app.py` actualizado.
-- `data/dauer_aplicaciones.csv`
-- `data/dauer_fichas.csv`
+- `app.py`: reemplaza el `app.py` actual.
+- `data/serrat_aplicaciones.csv`: agregar dentro de la carpeta `data` del repositorio.
+- `data/serrat_fichas.csv`: agregar dentro de la carpeta `data` del repositorio.
 
-Cambios principales:
+Cambios:
 
-1. DAUER separado en columnas técnicas:
-   - estrias_externas
-   - estrias_internas
-   - estrias_lado_rueda
-   - estrias_lado_caja
-   - longitud_semieje
-   - longitud_cardan
-   - diametro_jh
-   - lado
-   - abs
-   - seguro
-   - posicion_seguro
-   - etc.
+- Agrega proveedor `SERRAT`.
+- Agrega familia `FUELLE`.
+- Normaliza códigos, marca, modelo, OEM y aplicaciones.
+- Separa medidas de fuelles en columnas:
+  - Boca chica
+  - Boca grande
+  - Largo
+  - Posición
+  - Lado
+- Cuando se selecciona familia `FUELLE`, aparecen filtros técnicos por medidas.
+- La búsqueda general y OEM/referencia buscan también por el RO/OEM de Serrat.
 
-2. Los filtros ya no se mezclan entre proveedores:
-   - Primero elegís proveedor: Todos, TIPER, WEGA, VTH o DAUER.
-   - Después recién se cargan Producto, Marca y Modelo según ese proveedor.
+Pasos:
 
-## Subida a GitHub
-
-- Reemplazar `app.py`.
-- Subir los CSV dentro de la carpeta `data`.
-- Commit.
-- Push.
-- Reboot app en Streamlit Cloud.
+1. Reemplazar `app.py`.
+2. Subir `serrat_aplicaciones.csv` y `serrat_fichas.csv` dentro de `data`.
+3. Commit.
+4. Push.
+5. Reboot app en Streamlit Cloud.
