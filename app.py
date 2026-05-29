@@ -222,8 +222,8 @@ def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.Dat
             df[col] = ""
 
     df = df[columns].copy()
-    df["fuente"] = df["fuente"].replace("", fuente)
-    df.loc[df["fuente"].eq(""), "fuente"] = fuente
+    # La fuente se conoce por el archivo; se fuerza para evitar CSV corridos o valores dañados.
+    df["fuente"] = fuente
     return df
 
 @st.cache_data(show_spinner="Cargando catálogo MIPOL...")
