@@ -37,8 +37,14 @@ def familia_producto(txt: str) -> str:
         ("EXTREMO", ["EXTREMO"]),
         ("AXIAL", ["AXIAL"]),
         ("PARRILLA", ["PARRILLA", "BANDEJA"]),
+        ("BUJE DE BARRA ESTABILIZADORA", ["BUJEDEBARRAESTABILIZADORA", "BARRAESTABILIZADORA"]),
+        ("BUJE EJE TRASERO", ["BUJEEJETRASERO", "EJETRASERO"]),
         ("BUJE", ["BUJE"]),
+        ("FUELLE", ["FUELLE"]),
+        ("TOPE DE AMORTIGUADOR", ["TOPEDEAMORTIGUADOR"]),
+        ("TOPE", ["TOPE"]),
         ("BRAZO", ["BRAZO"]),
+        ("SOPORTE DE MOTOR", ["SOPORTEDEMOTOR", "SOPORTEMOTOR"]),
         ("SOPORTE", ["SOPORTE"]),
         ("CAZOLETA", ["CAZOLETA"]),
         ("CRAPODINA", ["CRAPODINA"]),
@@ -95,11 +101,13 @@ def load_data():
     aplicaciones = pd.concat([
         read_csv_if_exists("aplicaciones.csv", app_cols, "TIPER"),
         read_csv_if_exists("wega_aplicaciones.csv", app_cols, "WEGA"),
+        read_csv_if_exists("vth_aplicaciones.csv", app_cols, "VTH"),
     ], ignore_index=True)
 
     fichas = pd.concat([
         read_csv_if_exists("fichas.csv", ficha_cols, "TIPER"),
         read_csv_if_exists("wega_fichas.csv", ficha_cols, "WEGA"),
+        read_csv_if_exists("vth_fichas.csv", ficha_cols, "VTH"),
     ], ignore_index=True)
 
     for df in (aplicaciones, fichas):
@@ -206,7 +214,7 @@ def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
 aplicaciones, fichas = load_data()
 
 st.title("🔎 Catálogo MIPOL")
-st.caption("Buscador interno con datos TIPER + WEGA. Mismos filtros, resultados separados por catálogo cuando hace falta.")
+st.caption("Buscador interno con datos TIPER + WEGA + VTH. Mismos filtros, resultados separados por catálogo cuando hace falta.")
 
 with st.sidebar:
     st.header("Filtros")
@@ -214,8 +222,8 @@ with st.sidebar:
 
     base_df = aplicaciones if modo == "Aplicaciones" else fichas
 
-    q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, bieleta...")
-    codigo = st.text_input("Código", placeholder="Ej: 30003, WR-110, FAP2827")
+    q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, 5872, bieleta...")
+    codigo = st.text_input("Código", placeholder="Ej: 30003, WR-110, FAP2827, 5872")
     oem = st.text_input("OEM / referencia", placeholder="Ej: 68105872AA, 90486296")
 
     # Cascada simple para que no muestre familias que después no pueden devolver nada.
@@ -275,30 +283,26 @@ res = df[mask].copy()
 st.markdown("#### Catálogo a mostrar")
 catalogo = st.radio(
     "Elegí qué resultados querés ver",
-    ["Ambos", "TIPER", "WEGA"],
+    ["Todos", "TIPER", "WEGA", "VTH"],
     horizontal=True,
     label_visibility="collapsed",
 )
 
-if catalogo == "TIPER":
-    res_tiper = res[res["fuente_norm"].eq("TIPER")].copy()
-    st.subheader(f"Resultados TIPER: {len(res_tiper):,}".replace(",", "."))
-    mostrar_bloque("TIPER", res_tiper, modo)
+fuentes = ["TIPER", "WEGA", "VTH"]
 
-elif catalogo == "WEGA":
-    res_wega = res[res["fuente_norm"].eq("WEGA")].copy()
-    st.subheader(f"Resultados WEGA: {len(res_wega):,}".replace(",", "."))
-    mostrar_bloque("WEGA", res_wega, modo)
+if catalogo in fuentes:
+    res_cat = res[res["fuente_norm"].eq(catalogo)].copy()
+    st.subheader(f"Resultados {catalogo}: {len(res_cat):,}".replace(",", "."))
+    mostrar_bloque(catalogo, res_cat, modo)
 
 else:
-    res_tiper = res[res["fuente_norm"].eq("TIPER")].copy()
-    res_wega = res[res["fuente_norm"].eq("WEGA")].copy()
-
-    total = len(res_tiper) + len(res_wega)
+    bloques = [(fuente, res[res["fuente_norm"].eq(fuente)].copy()) for fuente in fuentes]
+    total = sum(len(df_bloque) for _, df_bloque in bloques)
     st.subheader(f"Resultados totales: {total:,}".replace(",", "."))
-    mostrar_bloque("TIPER", res_tiper, modo)
-    st.divider()
-    mostrar_bloque("WEGA", res_wega, modo)
+    for idx, (fuente, df_bloque) in enumerate(bloques):
+        if idx > 0:
+            st.divider()
+        mostrar_bloque(fuente, df_bloque, modo)
 
 st.divider()
 st.markdown("""
