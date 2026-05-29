@@ -191,11 +191,29 @@ def text_search(df: pd.DataFrame, query: str, cols: list[str]) -> pd.Series:
     joined = df[available_cols].astype(str).agg(" ".join, axis=1).map(norm)
     return joined.str.contains(q, na=False)
 
+def sort_valor_tecnico(x: str):
+    x = limpiar(x)
+    try:
+        return (0, float(x.replace(",", ".")))
+    except Exception:
+        return (1, norm(x))
+
 def select_options(df: pd.DataFrame, col: str) -> list[str]:
     if col not in df.columns:
         return []
     vals = [limpiar(v) for v in df[col].dropna().astype(str).unique() if limpiar(v)]
     return sorted(set(vals), key=lambda x: norm(x))
+
+def select_options_tecnico(df: pd.DataFrame, col: str) -> list[str]:
+    if col not in df.columns:
+        return []
+    vals = [limpiar(v) for v in df[col].dropna().astype(str).unique() if limpiar(v)]
+    return sorted(set(vals), key=sort_valor_tecnico)
+
+def filtrar_tecnico(df: pd.DataFrame, col: str, value: str) -> pd.Series:
+    if value in ["Todos", "Todas", ""] or col not in df.columns:
+        return pd.Series(True, index=df.index)
+    return df[col].astype(str).map(limpiar).map(norm).eq(norm(value))
 
 def filtrar_por_display(df: pd.DataFrame, col: str, value: str, todos: str) -> pd.Series:
     if value == todos or col not in df.columns:
@@ -216,16 +234,32 @@ def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
     return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
+    es_dauer = False
+    if not res.empty and "fuente_norm" in res.columns:
+        fuentes = set(res["fuente_norm"].dropna().astype(str).unique())
+        es_dauer = fuentes == {"DAUER"}
+
     if modo == "Aplicaciones":
-        cols = [
-            "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-            "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
-        ] + TECNICAS + ["imagen_producto", "url_ficha"]
+        if es_dauer:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
+                "info", "oem",
+            ] + TECNICAS + ["imagen_producto", "url_ficha"]
+        else:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
+                "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
+            ] + TECNICAS + ["imagen_producto", "url_ficha"]
     else:
-        cols = [
-            "fuente", "codigo", "familia", "producto", "ficha_anio",
-            "ficha_info", "ficha_oem", "ficha_medidas",
-        ] + TECNICAS + ["imagen_producto", "url_ficha"]
+        if es_dauer:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "ficha_anio",
+            ] + TECNICAS + ["imagen_producto", "url_ficha"]
+        else:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "ficha_anio",
+                "ficha_info", "ficha_oem", "ficha_medidas",
+            ] + TECNICAS + ["imagen_producto", "url_ficha"]
 
     cols = [c for c in cols if c in res.columns and (res[c].astype(str).str.strip().ne("").any() or c in ["fuente", "codigo", "familia", "producto", "marca", "modelo"])]
     out = res[cols].copy().drop_duplicates()
@@ -299,9 +333,44 @@ with st.sidebar:
             df_opciones = df_opciones[df_opciones["marca_norm"].eq(norm(marca))]
 
         modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"))
+        if modelo != "Todos":
+            df_opciones = df_opciones[df_opciones["modelo_norm"].eq(norm(modelo))]
     else:
         marca = "Todas"
         modelo = "Todos"
+
+    # Filtros técnicos exclusivos de DAUER.
+    # No aparecen en TIPER/WEGA/VTH para no mezclar proveedores ni ensuciar la búsqueda.
+    if catalogo == "DAUER":
+        st.divider()
+        st.subheader("Medidas DAUER")
+        estrias_externas_sel = st.selectbox(
+            "Estrías externas",
+            ["Todos"] + select_options_tecnico(df_opciones, "estrias_externas"),
+        )
+        estrias_internas_sel = st.selectbox(
+            "Estrías internas",
+            ["Todos"] + select_options_tecnico(df_opciones, "estrias_internas"),
+        )
+        seguro_sel = st.selectbox(
+            "Seguro / traba",
+            ["Todos"] + select_options_tecnico(df_opciones, "seguro"),
+            help="Filtra valores como Externo, Interno o Medio si DAUER los trae.",
+        )
+        posicion_seguro_sel = st.selectbox(
+            "Posición seguro / traba",
+            ["Todos"] + select_options_tecnico(df_opciones, "posicion_seguro"),
+        )
+        lado_sel = st.selectbox(
+            "Lado",
+            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
+        )
+    else:
+        estrias_externas_sel = "Todos"
+        estrias_internas_sel = "Todos"
+        seguro_sel = "Todos"
+        posicion_seguro_sel = "Todos"
+        lado_sel = "Todos"
 
 df = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
 df = filtrar_fuente(df, catalogo)
@@ -340,6 +409,13 @@ if modo == "Aplicaciones":
     if modelo != "Todos":
         mask &= filtrar_por_display(df, "modelo", modelo, "Todos")
 
+if catalogo == "DAUER":
+    mask &= filtrar_tecnico(df, "estrias_externas", estrias_externas_sel)
+    mask &= filtrar_tecnico(df, "estrias_internas", estrias_internas_sel)
+    mask &= filtrar_tecnico(df, "seguro", seguro_sel)
+    mask &= filtrar_tecnico(df, "posicion_seguro", posicion_seguro_sel)
+    mask &= filtrar_tecnico(df, "lado", lado_sel)
+
 res = df[mask].copy()
 
 if catalogo != "Todos":
@@ -356,6 +432,5 @@ else:
 
 st.divider()
 st.markdown("""
-**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. También busca en medidas técnicas cuando existen:
-estrías, longitud, diámetro, lado, ABS, seguro, etc.
+**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Si elegís DAUER, aparecen filtros técnicos propios: estrías internas/externas, seguro/traba, posición del seguro y lado.
 """)
