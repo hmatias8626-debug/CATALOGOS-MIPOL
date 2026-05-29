@@ -77,6 +77,15 @@ def norm(txt: str) -> str:
 def limpiar(txt: str) -> str:
     return re.sub(r"\s+", " ", str(txt or "").replace("\ufeff", "")).strip()
 
+def extraer_motor_desde_info(txt: str) -> str:
+    """Para CILBRAKE: deja en la columna info solamente el motor.
+    Ej: 'Motor: 1.3 | Pieza: RUEDA' -> '1.3'.
+    Si no hay motor, queda vacío porque pieza/posición/lado ya tienen columnas propias.
+    """
+    t = limpiar(txt)
+    m = re.search(r"Motor\s*:\s*(.*?)(?:\s*\||$)", t, flags=re.IGNORECASE)
+    return limpiar(m.group(1)) if m else ""
+
 def familia_producto(txt: str) -> str:
     t = limpiar(txt).upper()
     tn = norm(t)
@@ -171,6 +180,12 @@ def load_data():
         for col in df.columns:
             df[col] = df[col].astype(str).fillna("").map(limpiar)
 
+        # CILBRAKE: en info dejamos únicamente el motor.
+        # Pieza, posición, lado, medidas y ABS ya se muestran en columnas técnicas.
+        if "fuente" in df.columns and "info" in df.columns:
+            mask_cilbrake = df["fuente"].map(norm).eq("CILBRAKE")
+            df.loc[mask_cilbrake, "info"] = df.loc[mask_cilbrake, "info"].apply(extraer_motor_desde_info)
+
         if "codigo" in df.columns:
             df["codigo"] = df["codigo"].str.replace(r"\.0$", "", regex=True)
 
@@ -252,11 +267,16 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
         es_cilbrake = fuentes == {"CILBRAKE"}
 
     if modo == "Aplicaciones":
-        if es_dauer or es_cilbrake:
+        if es_cilbrake:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-                "info", "oem",
-            ] + TECNICAS + ["imagen_producto", "url_ficha"]
+                "info",
+            ] + TECNICAS + ["imagen_producto", "url_ficha", "oem"]
+        elif es_dauer:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
+                "info",
+            ] + TECNICAS + ["imagen_producto", "url_ficha", "oem"]
         else:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
@@ -277,6 +297,8 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     out = res[cols].copy().drop_duplicates()
 
     rename = {c: NOMBRES_TECNICAS[c] for c in TECNICAS if c in out.columns}
+    if es_cilbrake and "info" in out.columns:
+        rename["info"] = "Motor"
     return out.rename(columns=rename)
 
 def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
