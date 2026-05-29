@@ -13,6 +13,7 @@ FUENTES = {
     "WEGA": ("wega_aplicaciones.csv", "wega_fichas.csv"),
     "VTH": ("vth_aplicaciones.csv", "vth_fichas.csv"),
     "DAUER": ("dauer_aplicaciones.csv", "dauer_fichas.csv"),
+    "CILBRAKE": ("cilbrake_aplicaciones.csv", "cilbrake_fichas.csv"),
 }
 
 TECNICAS = [
@@ -23,7 +24,12 @@ TECNICAS = [
     "altura_jh", "altura_punta_eje",
     "diametro_circunferencia_agujeros", "rosca_agujeros",
     "diametro_rodamiento", "diametro_menor",
-    "abs", "posicion_seguro", "seguro", "lado", "peso", "dimensiones",
+    "pieza", "posicion", "diametro_int", "diametro_ext", "altura",
+    "abs", "posicion_seguro", "lado", "peso", "dimensiones",
+]
+
+AUX_TECNICAS = [
+    "diametro_int_filtro", "diametro_ext_filtro", "altura_filtro",
 ]
 
 NOMBRES_TECNICAS = {
@@ -45,9 +51,13 @@ NOMBRES_TECNICAS = {
     "rosca_agujeros": "Rosca agujeros",
     "diametro_rodamiento": "Diám. rodamiento",
     "diametro_menor": "Diám. menor",
+    "pieza": "Pieza",
+    "posicion": "Posición",
+    "diametro_int": "Ø int real",
+    "diametro_ext": "Ø ext real",
+    "altura": "Altura real",
     "abs": "ABS",
-    "posicion_seguro": "Posición seguro",
-    "seguro": "Seguro",
+    "posicion_seguro": "Seguro",
     "lado": "Lado",
     "peso": "Peso",
     "dimensiones": "Dimensiones",
@@ -141,12 +151,12 @@ def load_data():
         "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
         "ficha_medidas", "ficha_oem", "ficha_info",
         "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
-    ] + TECNICAS
+    ] + TECNICAS + AUX_TECNICAS
 
     ficha_cols = [
         "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem",
         "ficha_medidas", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
-    ] + TECNICAS
+    ] + TECNICAS + AUX_TECNICAS
 
     aplicaciones_lista = []
     fichas_lista = []
@@ -230,17 +240,19 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
 
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
     vals = select_options(df, "fuente")
-    orden = ["TIPER", "WEGA", "VTH", "DAUER"]
+    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE"]
     return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     es_dauer = False
+    es_cilbrake = False
     if not res.empty and "fuente_norm" in res.columns:
         fuentes = set(res["fuente_norm"].dropna().astype(str).unique())
         es_dauer = fuentes == {"DAUER"}
+        es_cilbrake = fuentes == {"CILBRAKE"}
 
     if modo == "Aplicaciones":
-        if es_dauer:
+        if es_dauer or es_cilbrake:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info", "oem",
@@ -251,7 +263,7 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
                 "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
     else:
-        if es_dauer:
+        if es_dauer or es_cilbrake:
             cols = [
                 "fuente", "codigo", "familia", "producto", "ficha_anio",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
@@ -352,13 +364,8 @@ with st.sidebar:
             "Estrías internas",
             ["Todos"] + select_options_tecnico(df_opciones, "estrias_internas"),
         )
-        seguro_sel = st.selectbox(
-            "Seguro / traba",
-            ["Todos"] + select_options_tecnico(df_opciones, "seguro"),
-            help="Filtra valores como Externo, Interno o Medio si DAUER los trae.",
-        )
         posicion_seguro_sel = st.selectbox(
-            "Posición seguro / traba",
+            "Seguro",
             ["Todos"] + select_options_tecnico(df_opciones, "posicion_seguro"),
         )
         lado_sel = st.selectbox(
@@ -368,9 +375,46 @@ with st.sidebar:
     else:
         estrias_externas_sel = "Todos"
         estrias_internas_sel = "Todos"
-        seguro_sel = "Todos"
         posicion_seguro_sel = "Todos"
         lado_sel = "Todos"
+
+    # Filtros técnicos de rodamientos. Aparecen para cualquier proveedor
+    # cuando la familia seleccionada es RODAMIENTO.
+    if producto == "RODAMIENTO":
+        st.divider()
+        st.subheader("Medidas rodamiento")
+        diametro_int_sel = st.selectbox(
+            "Ø interior",
+            ["Todos"] + select_options_tecnico(df_opciones, "diametro_int_filtro"),
+            help="El filtro muestra el número entero. Ej: 17 incluye valores reales como 17.462.",
+        )
+        diametro_ext_sel = st.selectbox(
+            "Ø exterior",
+            ["Todos"] + select_options_tecnico(df_opciones, "diametro_ext_filtro"),
+        )
+        altura_sel = st.selectbox(
+            "Altura",
+            ["Todos"] + select_options_tecnico(df_opciones, "altura_filtro"),
+        )
+        abs_sel = st.selectbox(
+            "ABS",
+            ["Todos"] + select_options_tecnico(df_opciones, "abs"),
+        )
+        rod_posicion_sel = st.selectbox(
+            "Posición",
+            ["Todos"] + select_options_tecnico(df_opciones, "posicion"),
+        )
+        rod_lado_sel = st.selectbox(
+            "Lado rodamiento",
+            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
+        )
+    else:
+        diametro_int_sel = "Todos"
+        diametro_ext_sel = "Todos"
+        altura_sel = "Todos"
+        abs_sel = "Todos"
+        rod_posicion_sel = "Todos"
+        rod_lado_sel = "Todos"
 
 df = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
 df = filtrar_fuente(df, catalogo)
@@ -412,9 +456,16 @@ if modo == "Aplicaciones":
 if catalogo == "DAUER":
     mask &= filtrar_tecnico(df, "estrias_externas", estrias_externas_sel)
     mask &= filtrar_tecnico(df, "estrias_internas", estrias_internas_sel)
-    mask &= filtrar_tecnico(df, "seguro", seguro_sel)
     mask &= filtrar_tecnico(df, "posicion_seguro", posicion_seguro_sel)
     mask &= filtrar_tecnico(df, "lado", lado_sel)
+
+if producto == "RODAMIENTO":
+    mask &= filtrar_tecnico(df, "diametro_int_filtro", diametro_int_sel)
+    mask &= filtrar_tecnico(df, "diametro_ext_filtro", diametro_ext_sel)
+    mask &= filtrar_tecnico(df, "altura_filtro", altura_sel)
+    mask &= filtrar_tecnico(df, "abs", abs_sel)
+    mask &= filtrar_tecnico(df, "posicion", rod_posicion_sel)
+    mask &= filtrar_tecnico(df, "lado", rod_lado_sel)
 
 res = df[mask].copy()
 
@@ -432,5 +483,5 @@ else:
 
 st.divider()
 st.markdown("""
-**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Si elegís DAUER, aparecen filtros técnicos propios: estrías internas/externas, seguro/traba, posición del seguro y lado.
+**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Los cross/equivalencias se buscan desde Búsqueda general u OEM/referencia. Si elegís una familia técnica como RODAMIENTO, aparecen filtros por medidas.
 """)
