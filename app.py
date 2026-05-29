@@ -137,28 +137,72 @@ def familia_producto(txt: str) -> str:
 
     return t
 
-def read_csv_any(path: str) -> pd.DataFrame:
-    """Lee CSV detectando separador (, o ;) y tolerando columnas extra."""
-    try:
-        df = pd.read_csv(path, dtype=str, sep=None, engine="python").fillna("")
-    except Exception:
-        try:
-            df = pd.read_csv(path, dtype=str, sep=";").fillna("")
-        except Exception:
-            df = pd.read_csv(path, dtype=str, sep=",").fillna("")
+def normalizar_nombre_columna(col: str) -> str:
+    c = limpiar(col).lower()
+    c = c.replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u").replace("ñ", "n")
+    c = re.sub(r"[^a-z0-9]+", "_", c).strip("_")
+    alias = {
+        "cod": "codigo",
+        "codigo_producto": "codigo",
+        "codigo_articulo": "codigo",
+        "cod_producto": "codigo",
+        "producto_codigo": "codigo",
+        "cod_cilbrake": "codigo",
+        "codigo_cilbrake": "codigo",
+        "descripcion": "producto",
+        "desc": "producto",
+        "familia_producto": "producto",
+        "marca_vehiculo": "marca",
+        "marcavehiculo": "marca",
+        "modelo_vehiculo": "modelo",
+        "modelovehiculo": "modelo",
+        "ano": "anio",
+        "año": "anio",
+        "anio_modelo": "anio",
+        "imagen": "imagen_producto",
+        "imagen_url": "imagen_producto",
+        "image": "imagen_producto",
+        "url": "url_ficha",
+        "link": "url_ficha",
+        "ficha": "url_ficha",
+        "ro": "oem",
+        "referencia": "oem",
+        "referencias": "oem",
+        "cross": "oem",
+        "equivalencias": "oem",
+        "oem_referencia": "oem",
+        "boca_chica_mm": "boca_chica",
+        "boca_grande_mm": "boca_grande",
+        "largo_mm": "largo",
+        "diametro_interior": "diametro_int",
+        "diametro_exterior": "diametro_ext",
+        "diam_int": "diametro_int",
+        "diam_ext": "diametro_ext",
+        "int": "diametro_int",
+        "ext": "diametro_ext",
+        "alt": "altura",
+    }
+    return alias.get(c, c)
 
-    # Limpia columnas basura típicas de Excel/CSV y fusiona duplicadas tipo ficha_info.1
-    df = df[[c for c in df.columns if not str(c).startswith("Unnamed")]].copy()
-    for col in list(df.columns):
-        m = re.match(r"^(.*)\.\d+$", str(col))
-        if m:
-            base = m.group(1)
-            if base in df.columns:
-                df[base] = df[base].where(df[base].astype(str).str.strip().ne(""), df[col])
-                df = df.drop(columns=[col])
+def read_csv_any(path: str) -> pd.DataFrame:
+    """Lee CSV detectando separador y normalizando encabezados."""
+    last_error = None
+    for sep in [None, ",", ";", "\t", "|"]:
+        try:
+            kwargs = {"dtype": str, "encoding": "utf-8-sig"}
+            if sep is None:
+                kwargs.update({"sep": None, "engine": "python"})
             else:
-                df = df.rename(columns={col: base})
-    return df
+                kwargs.update({"sep": sep})
+            df = pd.read_csv(path, **kwargs).fillna("")
+            # Si quedó todo en una sola columna, probablemente no era ese separador.
+            if len(df.columns) <= 1 and sep not in [None, ";"]:
+                continue
+            df.columns = [normalizar_nombre_columna(c) for c in df.columns]
+            return df
+        except Exception as e:
+            last_error = e
+    raise last_error
 
 def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, filename)
@@ -166,6 +210,13 @@ def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.Dat
         return pd.DataFrame(columns=columns)
 
     df = read_csv_any(path)
+    df.columns = [normalizar_nombre_columna(c) for c in df.columns]
+
+    # Si el código vino en una variante de nombre, lo dejamos siempre como codigo.
+    posibles_codigos = [c for c in df.columns if c in ["codigo", "cod", "cod_articulo", "codigo_producto", "codigo_articulo"]]
+    if "codigo" not in df.columns and posibles_codigos:
+        df["codigo"] = df[posibles_codigos[0]]
+
     for col in columns:
         if col not in df.columns:
             df[col] = ""
@@ -367,7 +418,7 @@ with st.sidebar:
     modo = st.radio("Buscar por", ["Aplicaciones", "Fichas/códigos"], horizontal=False)
 
     base_df = aplicaciones if modo == "Aplicaciones" else fichas
-    disponibles = [f for f in FUENTES.keys()]
+    disponibles = fuentes_disponibles(base_df)
     opciones_catalogo = ["Todos"] + disponibles
 
     # IMPORTANTE: primero se elige proveedor; después recién se arman productos/marcas/modelos.
@@ -386,16 +437,16 @@ with st.sidebar:
 
     df_opciones = base_filtrada.copy()
 
-    producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"), key=f"producto_{modo}_{catalogo}")
+    producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"))
     if producto != "Todos":
         df_opciones = df_opciones[df_opciones["familia_norm"].eq(norm(producto))]
 
     if modo == "Aplicaciones":
-        marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"), key=f"marca_{modo}_{catalogo}_{producto}")
+        marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"))
         if marca != "Todas":
             df_opciones = df_opciones[df_opciones["marca_norm"].eq(norm(marca))]
 
-        modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"), key=f"modelo_{modo}_{catalogo}_{producto}_{marca}")
+        modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"))
         if modelo != "Todos":
             df_opciones = df_opciones[df_opciones["modelo_norm"].eq(norm(modelo))]
     else:
