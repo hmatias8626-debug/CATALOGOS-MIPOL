@@ -138,10 +138,26 @@ def familia_producto(txt: str) -> str:
     return t
 
 def read_csv_any(path: str) -> pd.DataFrame:
-    """Lee CSV detectando separador común (, o ;)."""
-    df = pd.read_csv(path, dtype=str, sep=None, engine="python").fillna("")
-    # Limpia BOM/espacios en nombres de columnas, típico cuando viene de Excel.
-    df.columns = [limpiar(c) for c in df.columns]
+    """Lee CSV detectando separador (, o ;) y tolerando columnas extra."""
+    try:
+        df = pd.read_csv(path, dtype=str, sep=None, engine="python").fillna("")
+    except Exception:
+        try:
+            df = pd.read_csv(path, dtype=str, sep=";").fillna("")
+        except Exception:
+            df = pd.read_csv(path, dtype=str, sep=",").fillna("")
+
+    # Limpia columnas basura típicas de Excel/CSV y fusiona duplicadas tipo ficha_info.1
+    df = df[[c for c in df.columns if not str(c).startswith("Unnamed")]].copy()
+    for col in list(df.columns):
+        m = re.match(r"^(.*)\.\d+$", str(col))
+        if m:
+            base = m.group(1)
+            if base in df.columns:
+                df[base] = df[base].where(df[base].astype(str).str.strip().ne(""), df[col])
+                df = df.drop(columns=[col])
+            else:
+                df = df.rename(columns={col: base})
     return df
 
 def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
@@ -351,11 +367,7 @@ with st.sidebar:
     modo = st.radio("Buscar por", ["Aplicaciones", "Fichas/códigos"], horizontal=False)
 
     base_df = aplicaciones if modo == "Aplicaciones" else fichas
-
-    # Lista fija desde FUENTES: así los proveedores aparecen aunque el CSV esté vacío,
-    # aunque Streamlit tenga caché vieja o aunque todavía no haya resultados cargados.
-    # Antes dependía de los datos ya cargados y por eso SERRAT podía no mostrarse.
-    disponibles = list(FUENTES.keys())
+    disponibles = [f for f in FUENTES.keys()]
     opciones_catalogo = ["Todos"] + disponibles
 
     # IMPORTANTE: primero se elige proveedor; después recién se arman productos/marcas/modelos.
@@ -374,16 +386,16 @@ with st.sidebar:
 
     df_opciones = base_filtrada.copy()
 
-    producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"))
+    producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"), key=f"producto_{modo}_{catalogo}")
     if producto != "Todos":
         df_opciones = df_opciones[df_opciones["familia_norm"].eq(norm(producto))]
 
     if modo == "Aplicaciones":
-        marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"))
+        marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"), key=f"marca_{modo}_{catalogo}_{producto}")
         if marca != "Todas":
             df_opciones = df_opciones[df_opciones["marca_norm"].eq(norm(marca))]
 
-        modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"))
+        modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"), key=f"modelo_{modo}_{catalogo}_{producto}_{marca}")
         if modelo != "Todos":
             df_opciones = df_opciones[df_opciones["modelo_norm"].eq(norm(modelo))]
     else:
