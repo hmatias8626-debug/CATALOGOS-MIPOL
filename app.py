@@ -138,56 +138,11 @@ def familia_producto(txt: str) -> str:
     return t
 
 def read_csv_any(path: str) -> pd.DataFrame:
-    """Lee CSV sin romper los otros proveedores.
-    Prueba separadores y elige el que realmente trae columnas conocidas.
-    """
-    candidatos = []
-    for sep in [",", ";", "\t", "|"]:
-        try:
-            df = pd.read_csv(path, dtype=str, sep=sep, encoding="utf-8-sig").fillna("")
-            raw_cols = list(df.columns)
-            norm_cols = [normalizar_nombre_columna(c) for c in raw_cols]
-            conocidos = {
-                "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
-                "ficha_medidas", "ficha_oem", "ficha_info", "imagen_producto",
-                "url_ficha", "fuente", "familia", "boca_chica", "boca_grande",
-                "largo", "posicion", "lado", "diametro_int", "diametro_ext", "altura",
-            }
-            score = sum(1 for c in norm_cols if c in conocidos)
-            # Penaliza los casos donde todo queda como una sola columna gigante.
-            if len(df.columns) <= 1:
-                score -= 100
-            # Premia si trae código con datos.
-            if "codigo" in norm_cols:
-                try:
-                    col_codigo = raw_cols[norm_cols.index("codigo")]
-                    if df[col_codigo].astype(str).str.strip().ne("").any():
-                        score += 20
-                except Exception:
-                    pass
-            candidatos.append((score, len(df.columns), df))
-        except Exception:
-            continue
-
-    if not candidatos:
-        return pd.read_csv(path, dtype=str, encoding="utf-8-sig").fillna("")
-
-    candidatos.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return candidatos[0][2].fillna("")
-
-
-def consolidar_columnas_normalizadas(df: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza encabezados y une columnas duplicadas como ficha_info / ficha_info.1."""
-    salida = pd.DataFrame(index=df.index)
-    for col in df.columns:
-        base = re.sub(r"\.\d+$", "", str(col))
-        nuevo = normalizar_nombre_columna(base)
-        serie = df[col].astype(str).fillna("").map(limpiar)
-        if nuevo in salida.columns:
-            salida[nuevo] = salida[nuevo].where(salida[nuevo].astype(str).str.strip().ne(""), serie)
-        else:
-            salida[nuevo] = serie
-    return salida
+    """Lee CSV normal; si viene separado por ; también lo detecta."""
+    try:
+        return pd.read_csv(path, dtype=str).fillna("")
+    except Exception:
+        return pd.read_csv(path, dtype=str, sep=";").fillna("")
 
 def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
     path = os.path.join(DATA_DIR, filename)
@@ -304,9 +259,9 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
     return df[df["fuente_norm"].eq(norm(catalogo))].copy()
 
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
-    # Mostrar siempre todos los proveedores configurados.
-    # Así no desaparece SERRAT u otro proveedor por un problema de cache/lectura parcial.
-    return list(FUENTES.keys())
+    vals = select_options(df, "fuente")
+    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT"]
+    return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     es_dauer = False
@@ -331,7 +286,7 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
             ] + TECNICAS + ["imagen_producto", "url_ficha", "oem"]
         elif es_serrat:
             cols = [
-                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
+                "fuente", "codigo", "producto", "marca", "modelo", "anio",
                 "info", "boca_chica", "boca_grande", "largo", "posicion", "lado",
                 "imagen_producto", "url_ficha", "oem"
             ]
@@ -357,6 +312,8 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     rename = {c: NOMBRES_TECNICAS[c] for c in TECNICAS if c in out.columns}
     if es_cilbrake and "info" in out.columns:
         rename["info"] = "Motor"
+    if es_serrat and "info" in out.columns:
+        rename["info"] = "Vehículo"
     return out.rename(columns=rename)
 
 def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
