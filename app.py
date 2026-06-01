@@ -15,6 +15,7 @@ FUENTES = {
     "DAUER": ("dauer_aplicaciones.csv", "dauer_fichas.csv"),
     "CILBRAKE": ("cilbrake_aplicaciones.csv", "cilbrake_fichas.csv"),
     "SERRAT": ("serrat_aplicaciones.csv", "serrat_fichas.csv"),
+    "REY GOMA": ("reygoma_aplicaciones.csv", "reygoma_fichas.csv"),
 }
 
 TECNICAS = [
@@ -231,6 +232,12 @@ def load_data():
                     df.loc[mask_serrat, "producto"] = df.loc[mask_serrat].apply(producto_serrat_desde_row, axis=1)
                     df.loc[mask_serrat, "familia"] = df.loc[mask_serrat, "producto"]
 
+                # REY GOMA: conservar el producto real como familia para no mezclar
+                # SOPORTE DE MOTOR con SOPORTE DE CAJA, FUELLE DIRECCIÓN, etc.
+                mask_reygoma = df["fuente"].map(norm).eq("REYGOMA")
+                if mask_reygoma.any():
+                    df.loc[mask_reygoma, "familia"] = df.loc[mask_reygoma, "producto"]
+
         for col in ["fuente", "familia", "marca", "modelo", "codigo"]:
             if col in df.columns:
                 df[f"{col}_norm"] = df[col].map(norm)
@@ -294,18 +301,20 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
 
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
     vals = select_options(df, "fuente")
-    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT"]
+    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT", "REY GOMA"]
     return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     es_dauer = False
     es_cilbrake = False
     es_serrat = False
+    es_reygoma = False
     if not res.empty and "fuente_norm" in res.columns:
         fuentes = set(res["fuente_norm"].dropna().astype(str).unique())
         es_dauer = fuentes == {"DAUER"}
         es_cilbrake = fuentes == {"CILBRAKE"}
         es_serrat = fuentes == {"SERRAT"}
+        es_reygoma = fuentes == {"REYGOMA"}
 
     if modo == "Aplicaciones":
         if es_cilbrake:
@@ -324,13 +333,18 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
                 "info", "boca_chica", "boca_grande", "largo", "posicion", "lado",
                 "imagen_producto", "url_ficha", "oem"
             ]
+        elif es_reygoma:
+            cols = [
+                "fuente", "codigo", "producto", "marca", "modelo", "anio",
+                "info", "lado", "imagen_producto", "url_ficha", "oem"
+            ]
         else:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
     else:
-        if es_dauer or es_cilbrake or es_serrat:
+        if es_dauer or es_cilbrake or es_serrat or es_reygoma:
             cols = [
                 "fuente", "codigo", "familia", "producto", "ficha_anio",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
@@ -449,6 +463,17 @@ with st.sidebar:
         posicion_seguro_sel = "Todos"
         lado_sel = "Todos"
 
+    # Filtro técnico de REY GOMA: ubicación/lado del soporte o pieza.
+    if catalogo == "REY GOMA":
+        st.divider()
+        st.subheader("Ubicación Rey Goma")
+        reygoma_lado_sel = st.selectbox(
+            "Lado / ubicación",
+            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
+        )
+    else:
+        reygoma_lado_sel = "Todos"
+
     # Filtros técnicos de rodamientos. Aparecen para cualquier proveedor
     # cuando la familia seleccionada es RODAMIENTO.
     if producto == "RODAMIENTO":
@@ -561,6 +586,9 @@ if catalogo == "DAUER":
     mask &= filtrar_tecnico(df, "estrias_internas", estrias_internas_sel)
     mask &= filtrar_tecnico(df, "posicion_seguro", posicion_seguro_sel)
     mask &= filtrar_tecnico(df, "lado", lado_sel)
+
+if catalogo == "REY GOMA":
+    mask &= filtrar_tecnico(df, "lado", reygoma_lado_sel)
 
 if producto == "RODAMIENTO":
     mask &= filtrar_tecnico(df, "diametro_int_filtro", diametro_int_sel)
