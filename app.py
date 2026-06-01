@@ -90,6 +90,32 @@ def extraer_motor_desde_info(txt: str) -> str:
     m = re.search(r"Motor\s*:\s*(.*?)(?:\s*\||$)", t, flags=re.IGNORECASE)
     return limpiar(m.group(1)) if m else ""
 
+
+
+def producto_serrat_desde_row(row) -> str:
+    """Convierte Serrat a producto útil para filtro/tabla.
+    Ej: categoria TRANSMISIÓN -> FUELLE TRANSMISIÓN.
+    Si no hay categoría, intenta detectarlo desde info/ficha_info.
+    """
+    textos = []
+    for c in ["categoria", "info", "ficha_info", "producto"]:
+        try:
+            textos.append(limpiar(row.get(c, "")))
+        except Exception:
+            pass
+    unido = " ".join(textos).upper()
+    n = norm(unido)
+
+    if "TRANSMISION" in n:
+        return "FUELLE TRANSMISIÓN"
+    if "DIRECCION" in n:
+        return "FUELLE DIRECCIÓN"
+    if "SUSPENSION" in n:
+        return "FUELLE SUSPENSIÓN"
+    if "AMORTIGUADOR" in n:
+        return "FUELLE SUSPENSIÓN"
+    return "FUELLE"
+
 def familia_producto(txt: str) -> str:
     t = limpiar(txt).upper()
     tn = norm(t)
@@ -196,6 +222,14 @@ def load_data():
 
         if "producto" in df.columns:
             df["familia"] = df["producto"].apply(familia_producto)
+
+            # SERRAT: el filtro Producto debe distinguir el tipo de fuelle
+            # (TRANSMISIÓN / DIRECCIÓN / SUSPENSIÓN), no quedar como "FUELLE" genérico.
+            if "fuente" in df.columns:
+                mask_serrat = df["fuente"].map(norm).eq("SERRAT")
+                if mask_serrat.any():
+                    df.loc[mask_serrat, "producto"] = df.loc[mask_serrat].apply(producto_serrat_desde_row, axis=1)
+                    df.loc[mask_serrat, "familia"] = df.loc[mask_serrat, "producto"]
 
         for col in ["fuente", "familia", "marca", "modelo", "codigo"]:
             if col in df.columns:
@@ -455,7 +489,7 @@ with st.sidebar:
 
     # Filtros técnicos de fuelles. Aparecen para cualquier proveedor
     # cuando la familia seleccionada es FUELLE.
-    if producto == "FUELLE":
+    if "FUELLE" in norm(producto):
         st.divider()
         st.subheader("Medidas fuelle")
         boca_chica_sel = st.selectbox(
@@ -536,7 +570,7 @@ if producto == "RODAMIENTO":
     mask &= filtrar_tecnico(df, "posicion", rod_posicion_sel)
     mask &= filtrar_tecnico(df, "lado", rod_lado_sel)
 
-if producto == "FUELLE":
+if "FUELLE" in norm(producto):
     mask &= filtrar_tecnico(df, "boca_chica", boca_chica_sel)
     mask &= filtrar_tecnico(df, "boca_grande", boca_grande_sel)
     mask &= filtrar_tecnico(df, "largo", largo_sel)
