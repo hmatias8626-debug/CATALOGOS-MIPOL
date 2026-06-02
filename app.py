@@ -16,6 +16,7 @@ FUENTES = {
     "CILBRAKE": ("cilbrake_aplicaciones.csv", "cilbrake_fichas.csv"),
     "SERRAT": ("serrat_aplicaciones.csv", "serrat_fichas.csv"),
     "REY GOMA": ("reygoma_aplicaciones.csv", "reygoma_fichas.csv"),
+    "DAYCO": ("dayco_aplicaciones.csv", "dayco_fichas.csv"),
 }
 
 TECNICAS = [
@@ -33,6 +34,8 @@ TECNICAS = [
 AUX_TECNICAS = [
     "diametro_int_filtro", "diametro_ext_filtro", "altura_filtro",
 ]
+
+DAYCO_COLS = ["aplicacion_dayco", "tipo_dayco", "dimension", "motor", "kw", "hp"]
 
 NOMBRES_TECNICAS = {
     "estrias_externas": "Estrías externas",
@@ -148,6 +151,16 @@ def familia_producto(txt: str) -> str:
         ("ACCESORIOS", ["ACCESORIOS"]),
         ("KITS", ["KITS", "KIT"]),
 
+
+        # DAYCO
+        ("CORREA POLY-V", ["POLYV", "POLY V"]),
+        ("CORREA DE DISTRIBUCION", ["CORREADEDISTRIBUCION", "TIMINGBELT"]),
+        ("CORREA DE TRANSMISION", ["CORREADETRANSMISION", "RAWEDGE"]),
+        ("KIT DISTRIBUCION", ["KITDEDISTRIBUCION", "KITDISTRIBUCION", "TIMINGBELTKIT", "CHAINKIT"]),
+        ("KIT BOMBA DE AGUA", ["KITDEBOMBADEAGUA", "KITWATERPUMP"]),
+        ("TENSOR", ["TENSOR", "TENSIONER", "POLEA"]),
+        ("MANGUERA", ["MANGUERA", "HOSE"]),
+
         # DAUER / transmisión
         ("EJE CARDANICO", ["EJECARDANICO", "CARDAN"]),
         ("SEMIEJE", ["SEMIEJE"]),
@@ -192,12 +205,12 @@ def load_data():
         "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
         "ficha_medidas", "ficha_oem", "ficha_info",
         "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
-    ] + TECNICAS + AUX_TECNICAS
+    ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
 
     ficha_cols = [
         "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem",
         "ficha_medidas", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
-    ] + TECNICAS + AUX_TECNICAS
+    ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
 
     aplicaciones_lista = []
     fichas_lista = []
@@ -222,7 +235,13 @@ def load_data():
             df["codigo"] = df["codigo"].str.replace(r"\.0$", "", regex=True)
 
         if "producto" in df.columns:
-            df["familia"] = df["producto"].apply(familia_producto)
+            # Si el CSV ya trae familia confiable (por ejemplo DAYCO), la conservamos.
+            if "familia" in df.columns:
+                fam_original = df["familia"].astype(str).map(limpiar)
+                fam_calculada = df["producto"].apply(familia_producto)
+                df["familia"] = fam_original.where(fam_original.ne(""), fam_calculada)
+            else:
+                df["familia"] = df["producto"].apply(familia_producto)
 
             # SERRAT: el filtro Producto debe distinguir el tipo de fuelle
             # (TRANSMISIÓN / DIRECCIÓN / SUSPENSIÓN), no quedar como "FUELLE" genérico.
@@ -301,7 +320,7 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
 
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
     vals = select_options(df, "fuente")
-    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT", "REY GOMA"]
+    orden = ["TIPER", "WEGA", "VTH", "DAUER", "CILBRAKE", "SERRAT", "REY GOMA", "DAYCO"]
     return [x for x in orden if x in vals] + [x for x in vals if x not in orden]
 
 def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
@@ -309,12 +328,14 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
     es_cilbrake = False
     es_serrat = False
     es_reygoma = False
+    es_dayco = False
     if not res.empty and "fuente_norm" in res.columns:
         fuentes = set(res["fuente_norm"].dropna().astype(str).unique())
         es_dauer = fuentes == {"DAUER"}
         es_cilbrake = fuentes == {"CILBRAKE"}
         es_serrat = fuentes == {"SERRAT"}
         es_reygoma = fuentes == {"REYGOMA"}
+        es_dayco = fuentes == {"DAYCO"}
 
     if modo == "Aplicaciones":
         if es_cilbrake:
@@ -338,13 +359,24 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
                 "fuente", "codigo", "producto", "marca", "modelo", "anio",
                 "info", "lado", "imagen_producto", "url_ficha", "oem"
             ]
+        elif es_dayco:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
+                "motor", "kw", "hp", "aplicacion_dayco", "tipo_dayco", "dimension",
+                "imagen_producto", "url_ficha", "oem"
+            ]
         else:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
     else:
-        if es_dauer or es_cilbrake or es_serrat or es_reygoma:
+        if es_dayco:
+            cols = [
+                "fuente", "codigo", "familia", "producto", "aplicacion_dayco", "tipo_dayco", "dimension",
+                "ficha_oem", "imagen_producto", "url_ficha"
+            ]
+        elif es_dauer or es_cilbrake or es_serrat or es_reygoma:
             cols = [
                 "fuente", "codigo", "familia", "producto", "ficha_anio",
             ] + TECNICAS + ["imagen_producto", "url_ficha"]
@@ -549,7 +581,7 @@ df = filtrar_fuente(df, catalogo)
 
 mask = pd.Series(True, index=df.index)
 
-search_cols_tecnicas = TECNICAS + ["titulo", "categoria"]
+search_cols_tecnicas = TECNICAS + DAYCO_COLS + ["titulo", "categoria"]
 
 if q:
     if modo == "Aplicaciones":
