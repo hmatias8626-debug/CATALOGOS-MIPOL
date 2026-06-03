@@ -362,8 +362,8 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
         elif es_dayco:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-                "motor", "kw", "hp", "aplicacion_dayco", "tipo_dayco", "dimension",
-                "imagen_producto", "url_ficha", "oem"
+                "motor", "posicion", "abs", "kw", "hp", "aplicacion_dayco", "tipo_dayco", "dimension",
+                "info", "imagen_producto", "url_ficha", "oem"
             ]
         else:
             cols = [
