@@ -209,30 +209,45 @@ def query_productos(**kwargs):
     params = build_query_params(**kwargs)
     return query_productos_cached(tuple(sorted(params.items())))
 
+
+def split_oem_norm_cell(txt: str) -> set[str]:
+    """Toma la columna oem_norm ya normalizada de Supabase.
+    Ej: '90495169 | 93201397' -> {'90495169', '93201397'}
+    """
+    txt = str(txt or "")
+    out = set()
+    for p in re.split(r"[|,;/\n\r]+", txt):
+        n = normalizar_oem_token(p)
+        if len(n) >= 5:
+            if n.isdigit() and len(n) < 6:
+                continue
+            out.add(n)
+    return out
+
 def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.DataFrame:
-    if res_base.empty:
+    """Busca equivalencias usando SOLO oem_norm, para evitar timeout.
+    Ya no escanea descripción/info porque eso genera consultas enormes.
+    """
+    if res_base.empty or "oem_norm" not in res_base.columns:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
     tokens = set()
     for _, row in res_base.iterrows():
-        texto = " | ".join([
-            row.get("oem", ""), row.get("oem_norm", ""), row.get("ficha_oem", ""),
-            row.get("ficha_info", ""), row.get("info", ""), row.get("descripcion", "")
-        ])
-        tokens |= extraer_oem_tokens(texto)
+        tokens |= split_oem_norm_cell(row.get("oem_norm", ""))
 
     if not tokens:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
-    partes_or = []
-    for t in sorted(tokens):
-        partes_or.append(f"oem_norm.ilike.*{t}*")
-        partes_or.append(f"oem.ilike.*{t}*")
-        partes_or.append(f"ficha_oem.ilike.*{t}*")
+    # Máximo razonable para evitar consultas REST gigantes
+    tokens = sorted(tokens)[:20]
+
+    # Como oem_norm puede contener "90495169 | 93201397", usamos ilike por token,
+    # pero sólo sobre oem_norm y con pocos tokens.
+    partes_or = [f"oem_norm.ilike.*{t}*" for t in tokens]
 
     params = {
         "select": ",".join(COLUMNS),
-        "or": "(" + ",".join(partes_or[:120]) + ")",
+        "or": "(" + ",".join(partes_or) + ")",
         "limit": "1000",
         "order": "fuente.asc,codigo.asc",
     }
@@ -251,20 +266,18 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
     if fuente_actual != "Todos":
         df = df[df["fuente"].map(norm) != norm(fuente_actual)].copy()
 
-    # quitar resultados ya presentes por fuente/codigo/modelo
+    # quitar resultados ya presentes
     base_keys = set((res_base["fuente"] + "|" + res_base["codigo"] + "|" + res_base["modelo"]).tolist())
     df = df[~(df["fuente"] + "|" + df["codigo"] + "|" + df["modelo"]).isin(base_keys)].copy()
 
     def match_row(row):
-        texto = " | ".join([
-            row.get("oem", ""), row.get("oem_norm", ""), row.get("ficha_oem", ""),
-            row.get("ficha_info", ""), row.get("info", ""), row.get("descripcion", "")
-        ])
-        return " | ".join(sorted(extraer_oem_tokens(texto) & tokens))
+        row_tokens = split_oem_norm_cell(row.get("oem_norm", ""))
+        return " | ".join(sorted(row_tokens & set(tokens)))
 
     df["match_oem"] = df.apply(match_row, axis=1)
     df = df[df["match_oem"].str.strip().ne("")]
     return df.drop_duplicates()
+
 
 def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
     if df.empty:
