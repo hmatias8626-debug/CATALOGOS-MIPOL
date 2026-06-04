@@ -327,28 +327,34 @@ def extraer_oem_tokens_fila(row: pd.Series) -> set[str]:
 
 
 
+
 def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.DataFrame:
-    """Busca equivalencias usando OEM reales desde oem_norm/oem/ficha_oem.
-    No usa info ni descripción para evitar falsos positivos.
+    """Busca equivalencias usando OEM reales del resultado base,
+    pero consulta SOLO oem_norm en Supabase para evitar timeout.
     """
     if res_base.empty:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
     tokens = set()
     for _, row in res_base.iterrows():
-        tokens |= extraer_oem_tokens_fila(row)
+        # Para detectar OEM del producto origen sí usamos columnas confiables.
+        if "extraer_oem_tokens_fila" in globals():
+            tokens |= extraer_oem_tokens_fila(row)
+        else:
+            for col in ["oem_norm", "oem", "ficha_oem"]:
+                if col in row.index:
+                    tokens |= split_oem_tokens_reales(row.get(col, "")) if "split_oem_tokens_reales" in globals() else split_oem_norm_cell(row.get(col, ""))
 
     if not tokens:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
+    # Evitar query enorme.
     tokens = sorted(tokens)[:20]
 
-    # Buscar por oem_norm y también por oem/ficha_oem, por si algún proveedor no tiene oem_norm recalculado.
-    partes_or = []
-    for t in tokens:
-        partes_or.append(f"oem_norm.ilike.*{t}*")
-        partes_or.append(f"oem.ilike.*{t}*")
-        partes_or.append(f"ficha_oem.ilike.*{t}*")
+    # IMPORTANTE:
+    # Buscamos sólo en oem_norm. Esa columna está normalizada e indexada.
+    # No buscar en oem ni ficha_oem porque provoca statement timeout.
+    partes_or = [f"oem_norm.ilike.*{t}*" for t in tokens]
 
     params = {
         "select": ",".join(COLUMNS),
@@ -371,12 +377,19 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
     if fuente_actual != "Todos":
         df = df[df["fuente"].map(norm) != norm(fuente_actual)].copy()
 
-    # quitar resultados ya presentes
     base_keys = set((res_base["fuente"] + "|" + res_base["codigo"] + "|" + res_base["modelo"]).tolist())
     df = df[~(df["fuente"] + "|" + df["codigo"] + "|" + df["modelo"]).isin(base_keys)].copy()
 
+    def row_tokens_from_oem_norm(row):
+        # Para validar match también usamos sólo oem_norm del equivalente.
+        if "split_oem_norm_cell" in globals():
+            return split_oem_norm_cell(row.get("oem_norm", ""))
+        if "split_oem_tokens_reales" in globals():
+            return split_oem_tokens_reales(row.get("oem_norm", ""))
+        return set()
+
     def match_row(row):
-        row_tokens = extraer_oem_tokens_fila(row)
+        row_tokens = row_tokens_from_oem_norm(row)
         return " | ".join(sorted(row_tokens & set(tokens)))
 
     df["match_oem"] = df.apply(match_row, axis=1)
