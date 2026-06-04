@@ -17,13 +17,39 @@ SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 COLUMNS = [
     "id", "fuente", "codigo", "marca", "modelo", "anio", "producto", "familia",
     "posicion", "lado", "oem", "oem_norm", "descripcion", "info",
-    "ficha_oem", "ficha_info", "ficha_medidas", "imagen_producto", "url_ficha"
+    "ficha_oem", "ficha_info", "ficha_medidas", "imagen_producto", "url_ficha",
+
+    # Medidas técnicas rodamientos
+    "diametro_int", "diametro_ext", "altura", "abs",
+    "diametro_int_filtro", "diametro_ext_filtro", "altura_filtro",
+
+    # Medidas técnicas homocinéticas / semiejes / cardan
+    "estrias_externas", "estrias_internas", "estrias_lado_rueda", "estrias_lado_caja",
+    "longitud_semieje", "longitud_cardan", "longitud_punta_eje",
+    "diametro_asiento", "diametro_asiento_lado_rueda",
+    "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
+    "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
+    "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
+    "posicion_seguro", "seguro", "peso", "dimensiones", "pieza"
 ]
 
 DISPLAY_COLUMNS = [
     "fuente", "codigo", "producto", "familia", "marca", "modelo", "anio",
-    "posicion", "lado", "oem", "descripcion", "info", "ficha_medidas",
-    "imagen_producto", "url_ficha"
+    "pieza", "posicion", "lado", "oem", "descripcion", "info",
+
+    # Rodamientos
+    "diametro_int", "diametro_ext", "altura", "abs",
+
+    # Homocinéticas / semiejes / cardan
+    "estrias_externas", "estrias_internas", "estrias_lado_rueda", "estrias_lado_caja",
+    "longitud_semieje", "longitud_cardan", "longitud_punta_eje",
+    "diametro_asiento", "diametro_asiento_lado_rueda",
+    "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
+    "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
+    "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
+    "posicion_seguro", "seguro", "peso", "dimensiones",
+
+    "ficha_medidas", "imagen_producto", "url_ficha"
 ]
 
 def limpiar(txt: str) -> str:
@@ -109,7 +135,7 @@ def load_filter_cache():
     if not supabase_ready():
         return pd.DataFrame()
 
-    cols = "fuente,marca,modelo,familia,producto,posicion,lado"
+    cols = "fuente,marca,modelo,familia,producto,posicion,lado,diametro_int_filtro,diametro_ext_filtro,altura_filtro,abs,estrias_externas,estrias_internas,estrias_lado_rueda,estrias_lado_caja,seguro,posicion_seguro"
     all_rows = []
     start = 0
     while True:
@@ -144,6 +170,13 @@ def build_query_params(
     modelo: str,
     posicion: str,
     lado: str,
+    diametro_int: str = "Todos",
+    diametro_ext: str = "Todos",
+    altura: str = "Todos",
+    abs_sel: str = "Todos",
+    estrias_ext: str = "Todos",
+    estrias_int: str = "Todos",
+    seguro: str = "Todos",
     limit: int = MAX_RESULTS,
 ):
     params = {
@@ -171,6 +204,24 @@ def build_query_params(
 
     if lado != "Todos":
         params["lado"] = f"eq.{lado}"
+
+    # Filtros técnicos rodamientos
+    if diametro_int != "Todos":
+        params["diametro_int_filtro"] = f"eq.{diametro_int}"
+    if diametro_ext != "Todos":
+        params["diametro_ext_filtro"] = f"eq.{diametro_ext}"
+    if altura != "Todos":
+        params["altura_filtro"] = f"eq.{altura}"
+    if abs_sel != "Todos":
+        params["abs"] = f"eq.{abs_sel}"
+
+    # Filtros técnicos homocinéticas / semiejes
+    if estrias_ext != "Todos":
+        params["estrias_externas"] = f"eq.{estrias_ext}"
+    if estrias_int != "Todos":
+        params["estrias_internas"] = f"eq.{estrias_int}"
+    if seguro != "Todos":
+        params["seguro"] = f"eq.{seguro}"
 
     if codigo:
         params["codigo"] = f"ilike.*{codigo}*"
@@ -330,6 +381,31 @@ def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
         "url_ficha": "Ficha",
         "match_oem": "Coincidencia OEM",
         "ficha_medidas": "Medidas",
+        "diametro_int": "Ø int",
+        "diametro_ext": "Ø ext",
+        "altura": "Altura",
+        "abs": "ABS",
+        "estrias_externas": "Estrías externas",
+        "estrias_internas": "Estrías internas",
+        "estrias_lado_rueda": "Estrías lado rueda",
+        "estrias_lado_caja": "Estrías lado caja",
+        "longitud_semieje": "Longitud semieje",
+        "longitud_cardan": "Longitud cardán",
+        "longitud_punta_eje": "Longitud punta eje",
+        "diametro_asiento": "Diám. asiento",
+        "diametro_asiento_lado_rueda": "Diám. asiento rueda",
+        "diametro_jh": "Diám. JH",
+        "diametro_junta_homocinetica": "Diám. junta homocinética",
+        "diametro_jh_deslizante": "Diám. JH deslizante",
+        "altura_jh": "Altura JH",
+        "altura_punta_eje": "Altura punta eje",
+        "diametro_circunferencia_agujeros": "Diám. circ. agujeros",
+        "rosca_agujeros": "Rosca agujeros",
+        "diametro_rodamiento": "Diám. rodamiento",
+        "diametro_menor": "Diám. menor",
+        "posicion_seguro": "Posición seguro",
+        "seguro": "Seguro",
+        "pieza": "Pieza",
         "descripcion": "Descripción",
         "posicion": "Posición",
         "lado": "Lado",
@@ -404,10 +480,45 @@ with st.sidebar:
     posicion = st.selectbox("Posición", ["Todos"] + select_options(df_opciones, "posicion"))
     lado = st.selectbox("Lado", ["Todos"] + select_options(df_opciones, "lado"))
 
+    # Filtros técnicos dinámicos
+    prod_norm = norm(producto)
+    fams_actuales = " ".join(select_options(df_opciones, "familia")[:20])
+    es_rodamiento = producto != "Todos" and "RODAMIENTO" in prod_norm
+    es_homocinetica = producto != "Todos" and any(x in prod_norm for x in ["HOMOCINETICA", "SEMIEJE", "CARDAN", "EJE"])
+
+    if es_rodamiento:
+        st.divider()
+        st.subheader("Medidas rodamiento")
+        diametro_int = st.selectbox("Ø interior", ["Todos"] + select_options(df_opciones, "diametro_int_filtro"))
+        diametro_ext = st.selectbox("Ø exterior", ["Todos"] + select_options(df_opciones, "diametro_ext_filtro"))
+        altura = st.selectbox("Altura", ["Todos"] + select_options(df_opciones, "altura_filtro"))
+        abs_sel = st.selectbox("ABS", ["Todos"] + select_options(df_opciones, "abs"))
+    else:
+        diametro_int = "Todos"
+        diametro_ext = "Todos"
+        altura = "Todos"
+        abs_sel = "Todos"
+
+    if es_homocinetica:
+        st.divider()
+        st.subheader("Medidas homocinética / semieje")
+        estrias_ext = st.selectbox("Estrías externas", ["Todos"] + select_options(df_opciones, "estrias_externas"))
+        estrias_int = st.selectbox("Estrías internas", ["Todos"] + select_options(df_opciones, "estrias_internas"))
+        seguro = st.selectbox("Seguro", ["Todos"] + select_options(df_opciones, "seguro"))
+    else:
+        estrias_ext = "Todos"
+        estrias_int = "Todos"
+        seguro = "Todos"
+
     buscar = st.button("Buscar", type="primary")
 
 # Ejecuta automáticamente si hay algún filtro usado, o si presionan buscar.
-hay_filtro = any([q, codigo, oem, catalogo != "Todos", producto != "Todos", marca != "Todas", modelo != "Todos", posicion != "Todos", lado != "Todos"])
+hay_filtro = any([
+    q, codigo, oem, catalogo != "Todos", producto != "Todos", marca != "Todas",
+    modelo != "Todos", posicion != "Todos", lado != "Todos",
+    diametro_int != "Todos", diametro_ext != "Todos", altura != "Todos", abs_sel != "Todos",
+    estrias_ext != "Todos", estrias_int != "Todos", seguro != "Todos"
+])
 
 if not hay_filtro and not buscar:
     st.info("Elegí un proveedor, código, OEM, marca/modelo o producto para buscar.")
@@ -424,6 +535,13 @@ try:
         modelo=modelo,
         posicion=posicion,
         lado=lado,
+        diametro_int=diametro_int,
+        diametro_ext=diametro_ext,
+        altura=altura,
+        abs_sel=abs_sel,
+        estrias_ext=estrias_ext,
+        estrias_int=estrias_int,
+        seguro=seguro,
         limit=MAX_RESULTS,
     )
 except Exception as e:
