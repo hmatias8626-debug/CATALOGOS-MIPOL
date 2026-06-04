@@ -217,13 +217,13 @@ def load_data():
         "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
         "descripcion", "info_original", "version_motor",
         "ficha_medidas", "ficha_oem", "ficha_info",
-        "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
+        "match_oem", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
     ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
 
     ficha_cols = [
         "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem",
         "descripcion", "info_original", "version_motor",
-        "ficha_medidas", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
+        "ficha_medidas", "match_oem", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
     ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
 
     aplicaciones_lista = []
@@ -337,6 +337,69 @@ def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
         return df
     return df[df["fuente_norm"].eq(norm(catalogo))].copy()
 
+
+def extraer_oem_tokens_de_texto(txt: str) -> set[str]:
+    """Extrae posibles OEM/referencias desde un texto.
+    Normaliza quitando espacios/guiones para poder cruzar entre proveedores.
+    """
+    txt = str(txt or "").upper()
+    # Evitar tokens muy cortos y capturar alfanuméricos típicos de OEM.
+    candidatos = re.findall(r"[A-Z0-9][A-Z0-9\-/\. ]{4,}[A-Z0-9]", txt)
+    out = set()
+    for c in candidatos:
+        partes = re.split(r"[|,;/]", c)
+        for p in partes:
+            n = norm(p)
+            if len(n) >= 5 and not n.isdigit() == False:
+                # se aceptan numéricos largos y alfanuméricos
+                out.add(n)
+    return out
+
+def extraer_oems_fila(row: pd.Series) -> set[str]:
+    cols = [
+        "oem", "ficha_oem", "ficha_info", "ficha_medidas", "info",
+        "descripcion", "info_original", "titulo", "categoria"
+    ]
+    tokens = set()
+    for c in cols:
+        if c in row.index:
+            tokens |= extraer_oem_tokens_de_texto(row.get(c, ""))
+    # El código también puede servir como referencia cruzada en algunos proveedores,
+    # pero no lo usamos como OEM principal para evitar ruido.
+    return tokens
+
+def buscar_equivalencias_por_oem(df_total: pd.DataFrame, res_base: pd.DataFrame, catalogo_actual: str) -> pd.DataFrame:
+    """Busca en otros proveedores filas que compartan algún OEM con los resultados base."""
+    if res_base.empty or df_total.empty:
+        return pd.DataFrame(columns=df_total.columns)
+
+    oems = set()
+    for _, row in res_base.iterrows():
+        oems |= extraer_oems_fila(row)
+
+    if not oems:
+        return pd.DataFrame(columns=df_total.columns)
+
+    # Buscar en todos menos el proveedor actual, salvo que se haya elegido Todos.
+    candidatos = df_total.copy()
+    if catalogo_actual not in ["Todos", "Ambos"] and "fuente_norm" in candidatos.columns:
+        candidatos = candidatos[~candidatos["fuente_norm"].eq(norm(catalogo_actual))].copy()
+
+    if candidatos.empty:
+        return candidatos
+
+    def comparte(row):
+        return bool(extraer_oems_fila(row) & oems)
+
+    mask_eq = candidatos.apply(comparte, axis=1)
+    eq = candidatos[mask_eq].copy()
+    if eq.empty:
+        return eq
+
+    eq["match_oem"] = eq.apply(lambda r: " | ".join(sorted(extraer_oems_fila(r) & oems)), axis=1)
+    return eq.drop_duplicates()
+
+
 def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
     vals = select_options(df, "fuente")
     return sorted(vals, key=lambda x: norm(x))
@@ -362,61 +425,61 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info",
-            ] + TECNICAS + ["imagen_producto", "url_ficha", "oem"]
+            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha", "oem"]
         elif es_dauer:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info",
-            ] + TECNICAS + ["imagen_producto", "url_ficha", "oem"]
+            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha", "oem"]
         elif es_serrat:
             cols = [
                 "fuente", "codigo", "producto", "marca", "modelo", "anio",
                 "info", "boca_chica", "boca_grande", "largo", "posicion", "lado",
-                "imagen_producto", "url_ficha", "oem"
+                "match_oem", "imagen_producto", "url_ficha", "oem"
             ]
         elif es_reygoma:
             cols = [
                 "fuente", "codigo", "producto", "marca", "modelo", "anio",
-                "info", "lado", "imagen_producto", "url_ficha", "oem"
+                "info", "lado", "match_oem", "imagen_producto", "url_ficha", "oem"
             ]
         elif es_gacri:
             cols = [
                 "fuente", "codigo", "producto", "marca", "modelo", "version_motor",
                 "posicion", "lado", "oem", "descripcion", "info_original",
-                "imagen_producto", "url_ficha"
+                "match_oem", "imagen_producto", "url_ficha"
             ]
         elif es_dayco:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "motor", "posicion", "abs", "kw", "hp", "aplicacion_dayco", "tipo_dayco", "dimension",
-                "info", "imagen_producto", "url_ficha", "oem"
+                "info", "match_oem", "imagen_producto", "url_ficha", "oem"
             ]
         else:
             cols = [
                 "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
                 "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
-            ] + TECNICAS + ["imagen_producto", "url_ficha"]
+            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha"]
     else:
         if es_dayco:
             cols = [
                 "fuente", "codigo", "familia", "producto", "aplicacion_dayco", "tipo_dayco", "dimension",
-                "ficha_oem", "imagen_producto", "url_ficha"
+                "ficha_oem", "match_oem", "imagen_producto", "url_ficha"
             ]
         elif es_gacri:
             cols = [
                 "fuente", "codigo", "producto", "marca", "modelo", "version_motor",
                 "posicion", "lado", "oem", "descripcion", "info_original",
-                "imagen_producto", "url_ficha"
+                "match_oem", "imagen_producto", "url_ficha"
             ]
         elif es_dauer or es_cilbrake or es_serrat or es_reygoma:
             cols = [
                 "fuente", "codigo", "familia", "producto", "ficha_anio",
-            ] + TECNICAS + ["imagen_producto", "url_ficha"]
+            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha"]
         else:
             cols = [
                 "fuente", "codigo", "familia", "producto", "ficha_anio",
                 "ficha_info", "ficha_oem", "ficha_medidas",
-            ] + TECNICAS + ["imagen_producto", "url_ficha"]
+            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha"]
 
     cols = [c for c in cols if c in res.columns and (res[c].astype(str).str.strip().ne("").any() or c in ["fuente", "codigo", "familia", "producto", "marca", "modelo"])]
     out = res[cols].copy().drop_duplicates()
@@ -426,6 +489,8 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
         rename["info"] = "Motor"
     if es_serrat and "info" in out.columns:
         rename["info"] = "Vehículo"
+    if "match_oem" in out.columns:
+        rename["match_oem"] = "Coincidencia OEM"
     if es_gacri:
         rename.update({
             "version_motor": "Versión / motor",
@@ -490,6 +555,11 @@ with st.sidebar:
     q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, semieje, 22 estrías...")
     codigo = st.text_input("Código", placeholder="Ej: 30003, WR-110, ECA-AD0001")
     oem = st.text_input("OEM / referencia", placeholder="Ej: 68105872AA, 90486296")
+    buscar_equivalencias_oem = st.checkbox(
+        "Mostrar equivalencias por OEM en otros proveedores",
+        value=True,
+        help="Si el resultado encontrado tiene OEM, busca ese mismo OEM en otros proveedores como GACRI, REY GOMA, DAYCO, etc."
+    )
 
     df_opciones = base_filtrada.copy()
 
@@ -700,9 +770,26 @@ if "FUELLE" in norm(producto):
 
 res = df[mask].copy()
 
+equivalencias_oem = pd.DataFrame(columns=df.columns)
+if buscar_equivalencias_oem and catalogo != "Todos" and not res.empty:
+    # Busca equivalencias en el dataset completo del modo actual, no sólo en el proveedor elegido.
+    df_total_modo = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
+    equivalencias_oem = buscar_equivalencias_por_oem(df_total_modo, res, catalogo)
+
 if catalogo != "Todos":
     st.subheader(f"Resultados {catalogo}: {len(res):,}".replace(",", "."))
     mostrar_bloque(catalogo, res, modo)
+
+    if buscar_equivalencias_oem and not equivalencias_oem.empty:
+        st.divider()
+        st.subheader(f"Equivalencias por OEM en otros proveedores: {len(equivalencias_oem):,}".replace(",", "."))
+        for fuente_eq in fuentes_disponibles(equivalencias_oem):
+            bloque_eq = equivalencias_oem[equivalencias_oem["fuente_norm"].eq(norm(fuente_eq))].copy()
+            if not bloque_eq.empty:
+                mostrar_bloque(f"Equivalencias {fuente_eq}", bloque_eq, modo)
+                st.divider()
+    elif buscar_equivalencias_oem and not res.empty:
+        st.caption("No se encontraron equivalencias por OEM en otros proveedores para esta búsqueda.")
 else:
     total = len(res)
     st.subheader(f"Resultados totales: {total:,}".replace(",", "."))
