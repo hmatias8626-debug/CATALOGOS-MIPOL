@@ -211,17 +211,55 @@ def query_productos(**kwargs):
 
 
 def split_oem_norm_cell(txt: str) -> set[str]:
-    """Toma la columna oem_norm ya normalizada de Supabase.
-    Ej: '90495169 | 93201397' -> {'90495169', '93201397'}
+    """Toma oem_norm, pero descarta basura generada desde descripción/info.
+    Ej válido:
+      '90495169 | 93201397' -> {'90495169', '93201397'}
+    Ej inválido:
+      'SOPORTEDEMOTOR' -> descartado
     """
     txt = str(txt or "")
     out = set()
+
+    basura = {
+        "SOPORTE", "SOPORTEDEMOTOR", "SOPORTEMOTOR", "SOPORTEDECAJA", "SOPORTECAJA",
+        "SOPORTEAMORTIGUADOR", "BUJE", "BUJEPARRILLA", "BUJEBARRAESTABILIZADORA",
+        "MOTOR", "CAJA", "DERECHO", "IZQUIERDO", "DELANTERO", "TRASERO",
+        "SUPERIOR", "INFERIOR", "HIDRAULICO", "NOHIDRAULICO", "AMORTIGUADOR",
+        "PARRILLA", "BARRA", "ESTABILIZADORA", "CRAPODINA", "TOPE",
+        "MODELO", "ORIGINAL", "CODIGO", "PRODUCTO", "FAMILIA"
+    }
+
     for p in re.split(r"[|,;/\n\r]+", txt):
         n = normalizar_oem_token(p)
-        if len(n) >= 5:
-            if n.isdigit() and len(n) < 6:
+        if not n:
+            continue
+
+        # Descartar palabras de producto o ubicación.
+        if n in basura:
+            continue
+
+        # Descartar tokens compuestos de palabras comunes.
+        if any(b in n for b in [
+            "SOPORTE", "BUJE", "MOTOR", "DERECHO", "IZQUIERDO",
+            "DELANTERO", "TRASERO", "HIDRAULICO", "AMORTIGUADOR"
+        ]):
+            continue
+
+        # OEM numérico: mínimo 6 dígitos.
+        if n.isdigit():
+            if len(n) < 6:
                 continue
             out.add(n)
+            out.add(n.lstrip("0") or n)
+            continue
+
+        # OEM alfanumérico: debe tener números y letras.
+        # Ej: 96FX3290AA, 25C63280LB.
+        tiene_letra = bool(re.search(r"[A-Z]", n))
+        tiene_numero = bool(re.search(r"\d", n))
+        if tiene_letra and tiene_numero and len(n) >= 6:
+            out.add(n)
+
     return out
 
 def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.DataFrame:
