@@ -30,7 +30,7 @@ COLUMNS = [
     "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
     "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
     "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
-    "posicion_seguro", "seguro", "peso", "dimensiones", "pieza"
+    "seguro", "peso", "dimensiones", "pieza"
 ]
 
 DISPLAY_COLUMNS = [
@@ -47,9 +47,9 @@ DISPLAY_COLUMNS = [
     "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
     "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
     "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
-    "posicion_seguro", "seguro", "peso", "dimensiones",
+    "seguro", "peso", "dimensiones",
 
-    "ficha_medidas", "imagen_producto", "url_ficha"
+    "imagen_producto", "url_ficha"
 ]
 
 def limpiar(txt: str) -> str:
@@ -410,7 +410,6 @@ def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
         "rosca_agujeros": "Rosca agujeros",
         "diametro_rodamiento": "Diám. rodamiento",
         "diametro_menor": "Diám. menor",
-        "posicion_seguro": "Posición seguro",
         "seguro": "Seguro",
         "pieza": "Pieza",
         "descripcion": "Descripción",
