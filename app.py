@@ -1,76 +1,33 @@
-import os
+
 import re
+import math
+import requests
 import pandas as pd
 import streamlit as st
 
 st.set_page_config(page_title="Catálogo MIPOL", page_icon="🔎", layout="wide")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+TABLE = "mipol_productos_catalogo"
+PAGE_SIZE = 1000
+MAX_RESULTS = 1000
 
-FUENTES = {
-    "TIPER": ("aplicaciones.csv", "fichas.csv"),
-    "WEGA": ("wega_aplicaciones.csv", "wega_fichas.csv"),
-    "VTH": ("vth_aplicaciones.csv", "vth_fichas.csv"),
-    "DAUER": ("dauer_aplicaciones.csv", "dauer_fichas.csv"),
-    "CILBRAKE": ("cilbrake_aplicaciones.csv", "cilbrake_fichas.csv"),
-    "SERRAT": ("serrat_aplicaciones.csv", "serrat_fichas.csv"),
-    "REY GOMA": ("reygoma_aplicaciones.csv", "reygoma_fichas.csv"),
-    "DAYCO": ("dayco_aplicaciones.csv", "dayco_fichas.csv"),
-    "GACRI": ("gacri_catalogo.csv", "gacri_catalogo.csv"),
-}
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
 
-TECNICAS = [
-    "estrias_externas", "estrias_internas", "estrias_lado_rueda", "estrias_lado_caja",
-    "longitud_semieje", "longitud_cardan", "longitud_punta_eje",
-    "diametro_asiento", "diametro_asiento_lado_rueda",
-    "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
-    "altura_jh", "altura_punta_eje",
-    "diametro_circunferencia_agujeros", "rosca_agujeros",
-    "diametro_rodamiento", "diametro_menor",
-    "pieza", "posicion", "diametro_int", "diametro_ext", "altura",
-    "abs", "posicion_seguro", "lado", "boca_chica", "boca_grande", "largo", "peso", "dimensiones",
+COLUMNS = [
+    "id", "fuente", "codigo", "marca", "modelo", "anio", "producto", "familia",
+    "posicion", "lado", "oem", "oem_norm", "descripcion", "info",
+    "ficha_oem", "ficha_info", "ficha_medidas", "imagen_producto", "url_ficha"
 ]
 
-AUX_TECNICAS = [
-    "diametro_int_filtro", "diametro_ext_filtro", "altura_filtro",
+DISPLAY_COLUMNS = [
+    "fuente", "codigo", "producto", "familia", "marca", "modelo", "anio",
+    "posicion", "lado", "oem", "descripcion", "info", "ficha_medidas",
+    "imagen_producto", "url_ficha"
 ]
 
-DAYCO_COLS = ["aplicacion_dayco", "tipo_dayco", "dimension", "motor", "kw", "hp"]
-
-NOMBRES_TECNICAS = {
-    "estrias_externas": "Estrías externas",
-    "estrias_internas": "Estrías internas",
-    "estrias_lado_rueda": "Estrías lado rueda",
-    "estrias_lado_caja": "Estrías lado caja",
-    "longitud_semieje": "Longitud semieje",
-    "longitud_cardan": "Longitud cardan",
-    "longitud_punta_eje": "Longitud punta eje",
-    "diametro_asiento": "Diám. asiento",
-    "diametro_asiento_lado_rueda": "Diám. asiento lado rueda",
-    "diametro_jh": "Diám. JH",
-    "diametro_junta_homocinetica": "Diám. junta homocinética",
-    "diametro_jh_deslizante": "Diám. JH deslizante",
-    "altura_jh": "Altura JH",
-    "altura_punta_eje": "Altura punta eje",
-    "diametro_circunferencia_agujeros": "Diám. circ. agujeros",
-    "rosca_agujeros": "Rosca agujeros",
-    "diametro_rodamiento": "Diám. rodamiento",
-    "diametro_menor": "Diám. menor",
-    "pieza": "Pieza",
-    "posicion": "Posición",
-    "diametro_int": "Ø int real",
-    "diametro_ext": "Ø ext real",
-    "altura": "Altura real",
-    "abs": "ABS",
-    "posicion_seguro": "Seguro",
-    "lado": "Lado",
-    "boca_chica": "Boca chica",
-    "boca_grande": "Boca grande",
-    "largo": "Largo",
-    "peso": "Peso",
-    "dimensiones": "Dimensiones",
-}
+def limpiar(txt: str) -> str:
+    return re.sub(r"\s+", " ", str(txt or "").replace("\ufeff", "")).strip()
 
 def norm(txt: str) -> str:
     txt = str(txt or "").upper()
@@ -83,723 +40,376 @@ def norm(txt: str) -> str:
         txt = txt.replace(a, b)
     return re.sub(r"[^A-Z0-9]+", "", txt)
 
-def limpiar(txt: str) -> str:
-    return re.sub(r"\s+", " ", str(txt or "").replace("\ufeff", "")).strip()
+def normalizar_oem_token(txt: str) -> str:
+    txt = str(txt or "").upper()
+    reemplazos = {
+        "Á": "A", "É": "E", "Í": "I", "Ó": "O", "Ú": "U",
+        "Ä": "A", "Ë": "E", "Ï": "I", "Ö": "O", "Ü": "U",
+        "Ñ": "N",
+    }
+    for a, b in reemplazos.items():
+        txt = txt.replace(a, b)
+    return re.sub(r"[^A-Z0-9]", "", txt)
 
-def extraer_motor_desde_info(txt: str) -> str:
-    """Para CILBRAKE: deja en la columna info solamente el motor.
-    Ej: 'Motor: 1.3 | Pieza: RUEDA' -> '1.3'.
-    Si no hay motor, queda vacío porque pieza/posición/lado ya tienen columnas propias.
-    """
-    t = limpiar(txt)
-    m = re.search(r"Motor\s*:\s*(.*?)(?:\s*\||$)", t, flags=re.IGNORECASE)
-    return limpiar(m.group(1)) if m else ""
+def extraer_oem_tokens(txt: str) -> set[str]:
+    txt = str(txt or "").upper()
+    if not txt.strip():
+        return set()
 
+    tokens = set()
+    partes = re.split(r"[|,;/\n\r]+", txt)
 
+    for parte in partes:
+        parte = re.sub(r"\b(ORIGINAL|OEM|NRO|N°|REF|REFERENCIA|CODIGO|CÓDIGO)\b\s*:?", " ", parte, flags=re.I)
+        candidatos = re.findall(r"[A-Z0-9]+(?:[\s\.\-]+[A-Z0-9]+)+|[A-Z0-9]{5,}", parte)
+        for c in candidatos:
+            n = normalizar_oem_token(c)
+            if len(n) < 5:
+                continue
+            if n.isdigit() and len(n) < 6:
+                continue
+            if n in {"SOPORTE", "MOTOR", "DERECHO", "IZQUIERDO", "DELANTERO", "TRASERO", "BUJE", "CAJA"}:
+                continue
+            tokens.add(n)
+            if n.isdigit():
+                tokens.add(n.lstrip("0") or n)
+    return tokens
 
-def producto_serrat_desde_row(row) -> str:
-    """Convierte Serrat a producto útil para filtro/tabla.
-    Ej: categoria TRANSMISIÓN -> FUELLE TRANSMISIÓN.
-    Si no hay categoría, intenta detectarlo desde info/ficha_info.
-    """
-    textos = []
-    for c in ["categoria", "info", "ficha_info", "producto"]:
-        try:
-            textos.append(limpiar(row.get(c, "")))
-        except Exception:
-            pass
-    unido = " ".join(textos).upper()
-    n = norm(unido)
+def headers(extra=None):
+    h = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "count=exact",
+    }
+    if extra:
+        h.update(extra)
+    return h
 
-    if "TRANSMISION" in n:
-        return "FUELLE TRANSMISIÓN"
-    if "DIRECCION" in n:
-        return "FUELLE DIRECCIÓN"
-    if "SUSPENSION" in n:
-        return "FUELLE SUSPENSIÓN"
-    if "AMORTIGUADOR" in n:
-        return "FUELLE SUSPENSIÓN"
-    return "FUELLE"
+def supabase_ready():
+    return bool(SUPABASE_URL and SUPABASE_KEY)
 
-def familia_producto(txt: str) -> str:
-    t = limpiar(txt).upper()
-    tn = norm(t)
+def rest_url():
+    return f"{SUPABASE_URL}/rest/v1/{TABLE}"
 
-    reglas = [
-        # TIPER / suspensión
-        ("ROTULA DE SUSPENSION", ["ROTULA"]),
-        ("PRECAP", ["PRECAP"]),
-        ("BIELETA", ["BIELETA"]),
-        ("EXTREMO", ["EXTREMO"]),
-        ("AXIAL", ["AXIAL"]),
-        ("PARRILLA", ["PARRILLA", "BANDEJA"]),
-        ("BUJE", ["BUJE"]),
-        ("BRAZO", ["BRAZO"]),
-        ("SOPORTE", ["SOPORTE"]),
-        ("CAZOLETA", ["CAZOLETA"]),
-        ("CRAPODINA", ["CRAPODINA"]),
-        ("AMORTIGUADOR", ["AMORTIGUADOR"]),
-        ("ESPIRAL", ["ESPIRAL"]),
+def supabase_get(params: dict, start: int = 0, end: int = PAGE_SIZE - 1):
+    r = requests.get(
+        rest_url(),
+        headers=headers({"Range": f"{start}-{end}"}),
+        params=params,
+        timeout=45,
+    )
+    if r.status_code >= 400:
+        raise RuntimeError(f"Supabase error {r.status_code}: {r.text[:500]}")
+    return r.json(), r.headers.get("content-range", "")
 
-        # WEGA / filtros
-        ("FILTRO DE AIRE", ["FILTRODEAIRE", "AIRE"]),
-        ("FILTRO DE ACEITE", ["FILTRODEACEITE", "ACEITE"]),
-        ("FILTRO DE COMBUSTIBLE", ["FILTRODECOMBUSTIBLE", "COMBUSTIBLE"]),
-        ("FILTRO DE HABITACULO", ["FILTRODEHABITACULO", "HABITACULO", "CABINA"]),
-        ("TRAMPA DE AGUA", ["TRAMPADEAGUA"]),
-        ("HIDRAULICO", ["HIDRAULICO"]),
-        ("CAJA AUTOMATICA", ["CAJAAUTOMATICA", "CAJAAUTOMÁTICA"]),
-        ("ACCESORIOS", ["ACCESORIOS"]),
-        ("KITS", ["KITS", "KIT"]),
+@st.cache_data(ttl=3600, show_spinner="Cargando filtros desde Supabase...")
+def load_filter_cache():
+    """Carga columnas livianas para armar filtros. No carga imágenes ni textos largos."""
+    if not supabase_ready():
+        return pd.DataFrame()
 
+    cols = "fuente,marca,modelo,familia,producto,posicion,lado"
+    all_rows = []
+    start = 0
+    while True:
+        data, cr = supabase_get({"select": cols, "order": "fuente.asc"}, start, start + PAGE_SIZE - 1)
+        if not data:
+            break
+        all_rows.extend(data)
+        if len(data) < PAGE_SIZE:
+            break
+        start += PAGE_SIZE
+        if start > 100000:
+            break
 
-        # GACRI / soportes
-        ("SOPORTE MOTOR", ["SOPORTEMOTOR", "SOPORTEDEMOTOR", "TACOMOTOR"]),
-        ("SOPORTE CAJA", ["SOPORTECAJA", "SOPORTEDECAJA", "CAJADEVELOCIDAD"]),
-        ("SOPORTE AMORTIGUADOR", ["SOPORTEAMORTIGUADOR", "CAZOLETA"]),
-        ("BUJE BARRA ESTABILIZADORA", ["BUJEBARRAESTABILIZADORA", "BARRAESTABILIZADORA"]),
-        ("BUJE PARRILLA", ["BUJEPARRILLA", "BUJEDEPARRILLA"]),
-        ("CRAPODINA", ["CRAPODINA"]),
-        ("TOPE AMORTIGUADOR", ["TOPEAMORTIGUADOR"]),
-        ("MANCHÓN", ["MANCHON"]),
-        ("PASA CABLE", ["PASACABLE"]),
-
-        # DAYCO
-        ("CORREA POLY-V", ["POLYV", "POLY V"]),
-        ("CORREA DE DISTRIBUCION", ["CORREADEDISTRIBUCION", "TIMINGBELT"]),
-        ("CORREA DE TRANSMISION", ["CORREADETRANSMISION", "RAWEDGE"]),
-        ("KIT DISTRIBUCION", ["KITDEDISTRIBUCION", "KITDISTRIBUCION", "TIMINGBELTKIT", "CHAINKIT"]),
-        ("KIT BOMBA DE AGUA", ["KITDEBOMBADEAGUA", "KITWATERPUMP"]),
-        ("TENSOR", ["TENSOR", "TENSIONER", "POLEA"]),
-        ("MANGUERA", ["MANGUERA", "HOSE"]),
-
-        # DAUER / transmisión
-        ("EJE CARDANICO", ["EJECARDANICO", "CARDAN"]),
-        ("SEMIEJE", ["SEMIEJE"]),
-        ("JUNTA HOMOCINETICA", ["JUNTAHOMOCINETICA", "HOMOCINETICA"]),
-        ("JUNTA DESLIZANTE", ["JUNTADESLIZANTE", "DESLIZANTE"]),
-        ("PUNTA DE EJE", ["PUNTADEEJE"]),
-        ("TRICETA", ["TRICETA"]),
-        ("FUELLE", ["FUELLE"]),
-    ]
-
-    for familia, palabras in reglas:
-        if any(p in tn for p in palabras):
-            return familia
-
-    return t
-
-def read_csv_any(path: str) -> pd.DataFrame:
-    """Lee CSV normal; si viene separado por ; también lo detecta."""
-    try:
-        return pd.read_csv(path, dtype=str).fillna("")
-    except Exception:
-        return pd.read_csv(path, dtype=str, sep=";").fillna("")
-
-def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.DataFrame:
-    path = os.path.join(DATA_DIR, filename)
-    if not os.path.exists(path):
-        return pd.DataFrame(columns=columns)
-
-    df = read_csv_any(path)
-    for col in columns:
-        if col not in df.columns:
-            df[col] = ""
-
-    df = df[columns].copy()
-    df["fuente"] = df["fuente"].replace("", fuente)
-    df.loc[df["fuente"].eq(""), "fuente"] = fuente
+    df = pd.DataFrame(all_rows).fillna("")
+    for c in df.columns:
+        df[c] = df[c].astype(str).map(limpiar)
     return df
 
-@st.cache_data(show_spinner="Cargando catálogo MIPOL...")
-def load_data():
-    app_cols = [
-        "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
-        "descripcion", "info_original", "version_motor",
-        "ficha_medidas", "ficha_oem", "ficha_info",
-        "match_oem", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
-    ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
-
-    ficha_cols = [
-        "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem",
-        "descripcion", "info_original", "version_motor",
-        "ficha_medidas", "match_oem", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
-    ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
-
-    aplicaciones_lista = []
-    fichas_lista = []
-    for fuente, (archivo_app, archivo_ficha) in FUENTES.items():
-        aplicaciones_lista.append(read_csv_if_exists(archivo_app, app_cols, fuente))
-        fichas_lista.append(read_csv_if_exists(archivo_ficha, ficha_cols, fuente))
-
-    aplicaciones = pd.concat(aplicaciones_lista, ignore_index=True)
-    fichas = pd.concat(fichas_lista, ignore_index=True)
-
-    for df in (aplicaciones, fichas):
-        for col in df.columns:
-            df[col] = df[col].astype(str).fillna("").map(limpiar)
-
-        # CILBRAKE: en info dejamos únicamente el motor.
-        # Pieza, posición, lado, medidas y ABS ya se muestran en columnas técnicas.
-        if "fuente" in df.columns and "info" in df.columns:
-            mask_cilbrake = df["fuente"].map(norm).eq("CILBRAKE")
-            df.loc[mask_cilbrake, "info"] = df.loc[mask_cilbrake, "info"].apply(extraer_motor_desde_info)
-
-        if "codigo" in df.columns:
-            df["codigo"] = df["codigo"].str.replace(r"\.0$", "", regex=True)
-
-        if "producto" in df.columns:
-            # Si el CSV ya trae familia confiable (por ejemplo DAYCO), la conservamos.
-            if "familia" in df.columns:
-                fam_original = df["familia"].astype(str).map(limpiar)
-                fam_calculada = df["producto"].apply(familia_producto)
-                df["familia"] = fam_original.where(fam_original.ne(""), fam_calculada)
-            else:
-                df["familia"] = df["producto"].apply(familia_producto)
-
-            # SERRAT: el filtro Producto debe distinguir el tipo de fuelle
-            # (TRANSMISIÓN / DIRECCIÓN / SUSPENSIÓN), no quedar como "FUELLE" genérico.
-            if "fuente" in df.columns:
-                mask_serrat = df["fuente"].map(norm).eq("SERRAT")
-                if mask_serrat.any():
-                    df.loc[mask_serrat, "producto"] = df.loc[mask_serrat].apply(producto_serrat_desde_row, axis=1)
-                    df.loc[mask_serrat, "familia"] = df.loc[mask_serrat, "producto"]
-
-                # REY GOMA: conservar el producto real como familia para no mezclar
-                # SOPORTE DE MOTOR con SOPORTE DE CAJA, FUELLE DIRECCIÓN, etc.
-                mask_reygoma = df["fuente"].map(norm).eq("REYGOMA")
-                if mask_reygoma.any():
-                    df.loc[mask_reygoma, "familia"] = df.loc[mask_reygoma, "producto"]
-
-                # GACRI: el producto ya viene normalizado desde el extractor v3.
-                mask_gacri = df["fuente"].map(norm).eq("GACRI")
-                if mask_gacri.any():
-                    df.loc[mask_gacri, "familia"] = df.loc[mask_gacri, "producto"]
-
-        for col in ["fuente", "familia", "marca", "modelo", "codigo"]:
-            if col in df.columns:
-                df[f"{col}_norm"] = df[col].map(norm)
-
-    return aplicaciones, fichas
-
-def contains_norm(series: pd.Series, term: str) -> pd.Series:
-    t = norm(term)
-    if not t:
-        return pd.Series(True, index=series.index)
-    return series.astype(str).map(norm).str.contains(t, na=False)
-
-def text_search(df: pd.DataFrame, query: str, cols: list[str]) -> pd.Series:
-    q = norm(query)
-    if not q:
-        return pd.Series(True, index=df.index)
-
-    available_cols = [c for c in cols if c in df.columns]
-    if not available_cols:
-        return pd.Series(False, index=df.index)
-
-    joined = df[available_cols].astype(str).agg(" ".join, axis=1).map(norm)
-    return joined.str.contains(q, na=False)
-
-def sort_valor_tecnico(x: str):
-    x = limpiar(x)
-    try:
-        return (0, float(x.replace(",", ".")))
-    except Exception:
-        return (1, norm(x))
-
 def select_options(df: pd.DataFrame, col: str) -> list[str]:
-    if col not in df.columns:
+    if df.empty or col not in df.columns:
         return []
     vals = [limpiar(v) for v in df[col].dropna().astype(str).unique() if limpiar(v)]
     return sorted(set(vals), key=lambda x: norm(x))
 
-def select_options_tecnico(df: pd.DataFrame, col: str) -> list[str]:
-    if col not in df.columns:
-        return []
-    vals = [limpiar(v) for v in df[col].dropna().astype(str).unique() if limpiar(v)]
-    return sorted(set(vals), key=sort_valor_tecnico)
+def build_query_params(
+    fuente: str,
+    q: str,
+    codigo: str,
+    oem: str,
+    producto: str,
+    marca: str,
+    modelo: str,
+    posicion: str,
+    lado: str,
+    limit: int = MAX_RESULTS,
+):
+    params = {
+        "select": ",".join(COLUMNS),
+        "limit": str(limit),
+        "order": "fuente.asc,codigo.asc",
+    }
 
-def filtrar_tecnico(df: pd.DataFrame, col: str, value: str) -> pd.Series:
-    if value in ["Todos", "Todas", ""] or col not in df.columns:
-        return pd.Series(True, index=df.index)
-    return df[col].astype(str).map(limpiar).map(norm).eq(norm(value))
+    and_filters = []
 
-def filtrar_por_display(df: pd.DataFrame, col: str, value: str, todos: str) -> pd.Series:
-    if value == todos or col not in df.columns:
-        return pd.Series(True, index=df.index)
-    norm_col = f"{col}_norm"
-    if norm_col in df.columns:
-        return df[norm_col].eq(norm(value))
-    return df[col].map(norm).eq(norm(value))
+    if fuente != "Todos":
+        params["fuente"] = f"eq.{fuente}"
 
-def filtrar_fuente(df: pd.DataFrame, catalogo: str) -> pd.DataFrame:
-    if catalogo in ["Todos", "Ambos"]:
-        return df
-    return df[df["fuente_norm"].eq(norm(catalogo))].copy()
+    if producto != "Todos":
+        params["familia"] = f"eq.{producto}"
 
+    if marca != "Todas":
+        params["marca"] = f"eq.{marca}"
 
-def extraer_oem_tokens_de_texto(txt: str) -> set[str]:
-    """Extrae posibles OEM/referencias desde un texto.
-    Normaliza quitando espacios/guiones para poder cruzar entre proveedores.
-    """
-    txt = str(txt or "").upper()
-    # Evitar tokens muy cortos y capturar alfanuméricos típicos de OEM.
-    candidatos = re.findall(r"[A-Z0-9][A-Z0-9\-/\. ]{4,}[A-Z0-9]", txt)
-    out = set()
-    for c in candidatos:
-        partes = re.split(r"[|,;/]", c)
-        for p in partes:
-            n = norm(p)
-            if len(n) >= 5 and not n.isdigit() == False:
-                # se aceptan numéricos largos y alfanuméricos
-                out.add(n)
-    return out
+    if modelo != "Todos":
+        params["modelo"] = f"eq.{modelo}"
 
-def extraer_oems_fila(row: pd.Series) -> set[str]:
-    cols = [
-        "oem", "ficha_oem", "ficha_info", "ficha_medidas", "info",
-        "descripcion", "info_original", "titulo", "categoria"
-    ]
+    if posicion != "Todos":
+        params["posicion"] = f"eq.{posicion}"
+
+    if lado != "Todos":
+        params["lado"] = f"eq.{lado}"
+
+    if codigo:
+        params["codigo"] = f"ilike.*{codigo}*"
+
+    if oem:
+        oem_norm = normalizar_oem_token(oem)
+        if oem_norm:
+            params["or"] = f"(oem_norm.ilike.*{oem_norm}*,oem.ilike.*{oem}*,ficha_oem.ilike.*{oem}*)"
+
+    if q:
+        qsafe = q.replace(",", " ").replace(")", " ").replace("(", " ")
+        # búsqueda general en columnas principales
+        params["or"] = (
+            f"(codigo.ilike.*{qsafe}*,marca.ilike.*{qsafe}*,modelo.ilike.*{qsafe}*,"
+            f"producto.ilike.*{qsafe}*,familia.ilike.*{qsafe}*,descripcion.ilike.*{qsafe}*,"
+            f"info.ilike.*{qsafe}*,oem.ilike.*{qsafe}*,ficha_oem.ilike.*{qsafe}*)"
+        )
+
+    return params
+
+@st.cache_data(ttl=120, show_spinner=False)
+def query_productos_cached(params_tuple):
+    params = dict(params_tuple)
+    data, _ = supabase_get(params, 0, MAX_RESULTS - 1)
+    df = pd.DataFrame(data)
+    if df.empty:
+        return pd.DataFrame(columns=COLUMNS)
+    for c in COLUMNS:
+        if c not in df.columns:
+            df[c] = ""
+    for c in df.columns:
+        df[c] = df[c].fillna("").astype(str).map(limpiar)
+    return df[COLUMNS]
+
+def query_productos(**kwargs):
+    params = build_query_params(**kwargs)
+    return query_productos_cached(tuple(sorted(params.items())))
+
+def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.DataFrame:
+    if res_base.empty:
+        return pd.DataFrame(columns=COLUMNS + ["match_oem"])
+
     tokens = set()
-    for c in cols:
-        if c in row.index:
-            tokens |= extraer_oem_tokens_de_texto(row.get(c, ""))
-    # El código también puede servir como referencia cruzada en algunos proveedores,
-    # pero no lo usamos como OEM principal para evitar ruido.
-    return tokens
-
-def buscar_equivalencias_por_oem(df_total: pd.DataFrame, res_base: pd.DataFrame, catalogo_actual: str) -> pd.DataFrame:
-    """Busca en otros proveedores filas que compartan algún OEM con los resultados base."""
-    if res_base.empty or df_total.empty:
-        return pd.DataFrame(columns=df_total.columns)
-
-    oems = set()
     for _, row in res_base.iterrows():
-        oems |= extraer_oems_fila(row)
+        texto = " | ".join([
+            row.get("oem", ""), row.get("oem_norm", ""), row.get("ficha_oem", ""),
+            row.get("ficha_info", ""), row.get("info", ""), row.get("descripcion", "")
+        ])
+        tokens |= extraer_oem_tokens(texto)
 
-    if not oems:
-        return pd.DataFrame(columns=df_total.columns)
+    if not tokens:
+        return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
-    # Buscar en todos menos el proveedor actual, salvo que se haya elegido Todos.
-    candidatos = df_total.copy()
-    if catalogo_actual not in ["Todos", "Ambos"] and "fuente_norm" in candidatos.columns:
-        candidatos = candidatos[~candidatos["fuente_norm"].eq(norm(catalogo_actual))].copy()
+    partes_or = []
+    for t in sorted(tokens):
+        partes_or.append(f"oem_norm.ilike.*{t}*")
+        partes_or.append(f"oem.ilike.*{t}*")
+        partes_or.append(f"ficha_oem.ilike.*{t}*")
 
-    if candidatos.empty:
-        return candidatos
+    params = {
+        "select": ",".join(COLUMNS),
+        "or": "(" + ",".join(partes_or[:120]) + ")",
+        "limit": "1000",
+        "order": "fuente.asc,codigo.asc",
+    }
 
-    def comparte(row):
-        return bool(extraer_oems_fila(row) & oems)
+    data, _ = supabase_get(params, 0, 999)
+    df = pd.DataFrame(data)
+    if df.empty:
+        return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
-    mask_eq = candidatos.apply(comparte, axis=1)
-    eq = candidatos[mask_eq].copy()
-    if eq.empty:
-        return eq
+    for c in COLUMNS:
+        if c not in df.columns:
+            df[c] = ""
+    for c in df.columns:
+        df[c] = df[c].fillna("").astype(str).map(limpiar)
 
-    eq["match_oem"] = eq.apply(lambda r: " | ".join(sorted(extraer_oems_fila(r) & oems)), axis=1)
-    return eq.drop_duplicates()
+    if fuente_actual != "Todos":
+        df = df[df["fuente"].map(norm) != norm(fuente_actual)].copy()
 
+    # quitar resultados ya presentes por fuente/codigo/modelo
+    base_keys = set((res_base["fuente"] + "|" + res_base["codigo"] + "|" + res_base["modelo"]).tolist())
+    df = df[~(df["fuente"] + "|" + df["codigo"] + "|" + df["modelo"]).isin(base_keys)].copy()
 
-def fuentes_disponibles(df: pd.DataFrame) -> list[str]:
-    vals = select_options(df, "fuente")
-    return sorted(vals, key=lambda x: norm(x))
+    def match_row(row):
+        texto = " | ".join([
+            row.get("oem", ""), row.get("oem_norm", ""), row.get("ficha_oem", ""),
+            row.get("ficha_info", ""), row.get("info", ""), row.get("descripcion", "")
+        ])
+        return " | ".join(sorted(extraer_oem_tokens(texto) & tokens))
 
-def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
-    es_dauer = False
-    es_cilbrake = False
-    es_serrat = False
-    es_reygoma = False
-    es_dayco = False
-    es_gacri = False
-    if not res.empty and "fuente_norm" in res.columns:
-        fuentes = set(res["fuente_norm"].dropna().astype(str).unique())
-        es_dauer = fuentes == {"DAUER"}
-        es_cilbrake = fuentes == {"CILBRAKE"}
-        es_serrat = fuentes == {"SERRAT"}
-        es_reygoma = fuentes == {"REYGOMA"}
-        es_dayco = fuentes == {"DAYCO"}
-        es_gacri = fuentes == {"GACRI"}
+    df["match_oem"] = df.apply(match_row, axis=1)
+    df = df[df["match_oem"].str.strip().ne("")]
+    return df.drop_duplicates()
 
-    if modo == "Aplicaciones":
-        if es_cilbrake:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-                "info",
-            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha", "oem"]
-        elif es_dauer:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-                "info",
-            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha", "oem"]
-        elif es_serrat:
-            cols = [
-                "fuente", "codigo", "producto", "marca", "modelo", "anio",
-                "info", "boca_chica", "boca_grande", "largo", "posicion", "lado",
-                "match_oem", "imagen_producto", "url_ficha", "oem"
-            ]
-        elif es_reygoma:
-            cols = [
-                "fuente", "codigo", "producto", "marca", "modelo", "anio",
-                "info", "lado", "match_oem", "imagen_producto", "url_ficha", "oem"
-            ]
-        elif es_gacri:
-            cols = [
-                "fuente", "codigo", "producto", "marca", "modelo", "version_motor",
-                "posicion", "lado", "oem", "descripcion", "info_original",
-                "match_oem", "imagen_producto", "url_ficha"
-            ]
-        elif es_dayco:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-                "motor", "posicion", "abs", "kw", "hp", "aplicacion_dayco", "tipo_dayco", "dimension",
-                "info", "match_oem", "imagen_producto", "url_ficha", "oem"
-            ]
-        else:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "marca", "modelo", "anio",
-                "info", "oem", "ficha_medidas", "ficha_oem", "ficha_info",
-            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha"]
-    else:
-        if es_dayco:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "aplicacion_dayco", "tipo_dayco", "dimension",
-                "ficha_oem", "match_oem", "imagen_producto", "url_ficha"
-            ]
-        elif es_gacri:
-            cols = [
-                "fuente", "codigo", "producto", "marca", "modelo", "version_motor",
-                "posicion", "lado", "oem", "descripcion", "info_original",
-                "match_oem", "imagen_producto", "url_ficha"
-            ]
-        elif es_dauer or es_cilbrake or es_serrat or es_reygoma:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "ficha_anio",
-            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha"]
-        else:
-            cols = [
-                "fuente", "codigo", "familia", "producto", "ficha_anio",
-                "ficha_info", "ficha_oem", "ficha_medidas",
-            ] + TECNICAS + ["match_oem", "imagen_producto", "url_ficha"]
-
-    cols = [c for c in cols if c in res.columns and (res[c].astype(str).str.strip().ne("").any() or c in ["fuente", "codigo", "familia", "producto", "marca", "modelo"])]
-    out = res[cols].copy().drop_duplicates()
-
-    rename = {c: NOMBRES_TECNICAS[c] for c in TECNICAS if c in out.columns}
-    if es_cilbrake and "info" in out.columns:
-        rename["info"] = "Motor"
-    if es_serrat and "info" in out.columns:
-        rename["info"] = "Vehículo"
-    if "match_oem" in out.columns:
-        rename["match_oem"] = "Coincidencia OEM"
-    if es_gacri:
-        rename.update({
-            "version_motor": "Versión / motor",
-            "posicion": "Posición",
-            "lado": "Lado",
-            "descripcion": "Descripción",
-            "info_original": "Texto original OCR",
-            "oem": "OEM",
-        })
+def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
+    if df.empty:
+        return df
+    cols = DISPLAY_COLUMNS.copy()
+    if equivalencias and "match_oem" in df.columns:
+        cols.append("match_oem")
+    cols = [c for c in cols if c in df.columns and (df[c].astype(str).str.strip().ne("").any() or c in ["fuente", "codigo", "marca", "modelo", "producto"])]
+    out = df[cols].copy().drop_duplicates()
+    rename = {
+        "imagen_producto": "Imagen",
+        "url_ficha": "Ficha",
+        "match_oem": "Coincidencia OEM",
+        "ficha_medidas": "Medidas",
+        "descripcion": "Descripción",
+        "posicion": "Posición",
+        "lado": "Lado",
+        "anio": "Año",
+        "oem": "OEM",
+    }
     return out.rename(columns=rename)
 
-def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
+def mostrar_bloque(titulo: str, df: pd.DataFrame, equivalencias=False):
     st.markdown(f"### {titulo}")
     st.caption(f"Resultados: {len(df):,}".replace(",", "."))
-
     if df.empty:
         st.info("No hay resultados para esta selección.")
         return
 
     codigos = "\n".join(df["codigo"].dropna().astype(str).drop_duplicates().tolist())
     with st.expander("Copiar códigos", expanded=False):
-        st.text_area(
-            "Códigos encontrados",
-            codigos,
-            height=120,
-            key=f"codigos_{titulo}_{modo}",
-        )
+        st.text_area("Códigos encontrados", codigos, height=120, key=f"codigos_{titulo}_{equivalencias}")
 
     st.dataframe(
-        preparar_columnas(df, modo),
+        preparar_columnas(df, equivalencias=equivalencias),
         use_container_width=True,
         hide_index=True,
         column_config={
-            "imagen_producto": st.column_config.ImageColumn("Imagen", width="small"),
-            "url_ficha": st.column_config.LinkColumn("Ficha"),
+            "Imagen": st.column_config.ImageColumn("Imagen", width="small"),
+            "Ficha": st.column_config.LinkColumn("Ficha"),
         },
     )
 
-aplicaciones, fichas = load_data()
+if not supabase_ready():
+    st.error("Faltan SUPABASE_URL o SUPABASE_KEY en Streamlit Secrets.")
+    st.stop()
 
 st.title("🔎 Catálogo MIPOL")
-st.caption("Buscador interno con datos por proveedor. Los filtros se ajustan al catálogo seleccionado.")
+st.caption("Buscador interno conectado a Supabase.")
+
+filtros_df = load_filter_cache()
 
 with st.sidebar:
     st.header("Filtros")
-    modo = st.radio("Buscar por", ["Aplicaciones", "Fichas/códigos"], horizontal=False)
 
-    base_df = aplicaciones if modo == "Aplicaciones" else fichas
-    disponibles = fuentes_disponibles(base_df)
-    opciones_catalogo = ["Todos"] + disponibles
+    proveedores = ["Todos"] + select_options(filtros_df, "fuente")
+    catalogo = st.radio("Proveedor", proveedores, horizontal=False)
 
-    # IMPORTANTE: primero se elige proveedor; después recién se arman productos/marcas/modelos.
-    catalogo = st.radio(
-        "Proveedor",
-        opciones_catalogo,
-        horizontal=False,
-        help="Si elegís TIPER, solo aparecen productos/marcas/modelos de TIPER. No se mezclan filtros con WEGA, VTH o DAUER.",
-    )
+    df_opciones = filtros_df.copy()
+    if catalogo != "Todos":
+        df_opciones = df_opciones[df_opciones["fuente"].eq(catalogo)].copy()
 
-    base_filtrada = filtrar_fuente(base_df, catalogo)
+    q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, semieje...")
+    codigo = st.text_input("Código", placeholder="Ej: 4302, WR-110, KWD1072")
+    oem = st.text_input("OEM / referencia", placeholder="Ej: 90495169, 22.650.18")
 
-    q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, semieje, 22 estrías...")
-    codigo = st.text_input("Código", placeholder="Ej: 30003, WR-110, ECA-AD0001")
-    oem = st.text_input("OEM / referencia", placeholder="Ej: 68105872AA, 90486296")
-    buscar_equivalencias_oem = st.checkbox(
+    buscar_oem = st.checkbox(
         "Mostrar equivalencias por OEM en otros proveedores",
         value=True,
-        help="Si el resultado encontrado tiene OEM, busca ese mismo OEM en otros proveedores como GACRI, REY GOMA, DAYCO, etc."
+        help="Funciona mejor eligiendo un proveedor concreto. Normaliza 2265018 = 22.650.18 = 22 65 01 8.",
     )
-
-    df_opciones = base_filtrada.copy()
 
     producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"))
     if producto != "Todos":
-        df_opciones = df_opciones[df_opciones["familia_norm"].eq(norm(producto))]
+        df_opciones = df_opciones[df_opciones["familia"].eq(producto)].copy()
 
-    if modo == "Aplicaciones":
-        marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"))
-        if marca != "Todas":
-            df_opciones = df_opciones[df_opciones["marca_norm"].eq(norm(marca))]
-
-        modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"))
-        if modelo != "Todos":
-            df_opciones = df_opciones[df_opciones["modelo_norm"].eq(norm(modelo))]
-    else:
-        marca = "Todas"
-        modelo = "Todos"
-
-    # Filtros técnicos exclusivos de DAUER.
-    # No aparecen en TIPER/WEGA/VTH para no mezclar proveedores ni ensuciar la búsqueda.
-    if catalogo == "DAUER":
-        st.divider()
-        st.subheader("Medidas DAUER")
-        estrias_externas_sel = st.selectbox(
-            "Estrías externas",
-            ["Todos"] + select_options_tecnico(df_opciones, "estrias_externas"),
-        )
-        estrias_internas_sel = st.selectbox(
-            "Estrías internas",
-            ["Todos"] + select_options_tecnico(df_opciones, "estrias_internas"),
-        )
-        posicion_seguro_sel = st.selectbox(
-            "Seguro",
-            ["Todos"] + select_options_tecnico(df_opciones, "posicion_seguro"),
-        )
-        lado_sel = st.selectbox(
-            "Lado",
-            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
-        )
-    else:
-        estrias_externas_sel = "Todos"
-        estrias_internas_sel = "Todos"
-        posicion_seguro_sel = "Todos"
-        lado_sel = "Todos"
-
-    # Filtro técnico de REY GOMA: ubicación/lado del soporte o pieza.
-    if catalogo == "REY GOMA":
-        st.divider()
-        st.subheader("Ubicación Rey Goma")
-        reygoma_lado_sel = st.selectbox(
-            "Lado / ubicación",
-            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
-        )
-    else:
-        reygoma_lado_sel = "Todos"
-
-    # Filtros técnicos de GACRI: posición y lado.
-    if catalogo == "GACRI":
-        st.divider()
-        st.subheader("Ubicación GACRI")
-        gacri_posicion_sel = st.selectbox(
-            "Posición",
-            ["Todos"] + select_options_tecnico(df_opciones, "posicion"),
-        )
-        gacri_lado_sel = st.selectbox(
-            "Lado",
-            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
-        )
-    else:
-        gacri_posicion_sel = "Todos"
-        gacri_lado_sel = "Todos"
-
-    # Filtros técnicos de rodamientos. Aparecen para cualquier proveedor
-    # cuando la familia seleccionada es RODAMIENTO.
-    if producto == "RODAMIENTO":
-        st.divider()
-        st.subheader("Medidas rodamiento")
-        diametro_int_sel = st.selectbox(
-            "Ø interior",
-            ["Todos"] + select_options_tecnico(df_opciones, "diametro_int_filtro"),
-            help="El filtro muestra el número entero. Ej: 17 incluye valores reales como 17.462.",
-        )
-        diametro_ext_sel = st.selectbox(
-            "Ø exterior",
-            ["Todos"] + select_options_tecnico(df_opciones, "diametro_ext_filtro"),
-        )
-        altura_sel = st.selectbox(
-            "Altura",
-            ["Todos"] + select_options_tecnico(df_opciones, "altura_filtro"),
-        )
-        abs_sel = st.selectbox(
-            "ABS",
-            ["Todos"] + select_options_tecnico(df_opciones, "abs"),
-        )
-        rod_posicion_sel = st.selectbox(
-            "Posición",
-            ["Todos"] + select_options_tecnico(df_opciones, "posicion"),
-        )
-        rod_lado_sel = st.selectbox(
-            "Lado rodamiento",
-            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
-        )
-    else:
-        diametro_int_sel = "Todos"
-        diametro_ext_sel = "Todos"
-        altura_sel = "Todos"
-        abs_sel = "Todos"
-        rod_posicion_sel = "Todos"
-        rod_lado_sel = "Todos"
-
-    # Filtros técnicos de fuelles. Aparecen para cualquier proveedor
-    # cuando la familia seleccionada es FUELLE.
-    if "FUELLE" in norm(producto):
-        st.divider()
-        st.subheader("Medidas fuelle")
-        boca_chica_sel = st.selectbox(
-            "Boca chica",
-            ["Todos"] + select_options_tecnico(df_opciones, "boca_chica"),
-        )
-        boca_grande_sel = st.selectbox(
-            "Boca grande",
-            ["Todos"] + select_options_tecnico(df_opciones, "boca_grande"),
-        )
-        largo_sel = st.selectbox(
-            "Largo",
-            ["Todos"] + select_options_tecnico(df_opciones, "largo"),
-        )
-        fuelle_posicion_sel = st.selectbox(
-            "Posición",
-            ["Todos"] + select_options_tecnico(df_opciones, "posicion"),
-        )
-        fuelle_lado_sel = st.selectbox(
-            "Lado",
-            ["Todos"] + select_options_tecnico(df_opciones, "lado"),
-        )
-    else:
-        boca_chica_sel = "Todos"
-        boca_grande_sel = "Todos"
-        largo_sel = "Todos"
-        fuelle_posicion_sel = "Todos"
-        fuelle_lado_sel = "Todos"
-
-df = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
-df = filtrar_fuente(df, catalogo)
-
-mask = pd.Series(True, index=df.index)
-
-search_cols_tecnicas = TECNICAS + DAYCO_COLS + ["titulo", "categoria"]
-
-if q:
-    if modo == "Aplicaciones":
-        mask &= text_search(df, q, [
-            "codigo", "producto", "familia", "marca", "modelo", "anio",
-            "info", "oem", "descripcion", "info_original", "version_motor", "ficha_medidas", "ficha_oem", "ficha_info", "fuente",
-        ] + search_cols_tecnicas)
-    else:
-        mask &= text_search(df, q, [
-            "codigo", "producto", "familia", "ficha_anio",
-            "ficha_info", "ficha_oem", "ficha_medidas", "fuente",
-        ] + search_cols_tecnicas)
-
-if codigo:
-    mask &= contains_norm(df["codigo"], codigo)
-
-if oem:
-    if modo == "Aplicaciones":
-        mask &= text_search(df, oem, ["oem", "ficha_oem"])
-    else:
-        mask &= contains_norm(df["ficha_oem"], oem)
-
-if producto != "Todos":
-    mask &= filtrar_por_display(df, "familia", producto, "Todos")
-
-if modo == "Aplicaciones":
+    marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"))
     if marca != "Todas":
-        mask &= filtrar_por_display(df, "marca", marca, "Todas")
+        df_opciones = df_opciones[df_opciones["marca"].eq(marca)].copy()
+
+    modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"))
     if modelo != "Todos":
-        mask &= filtrar_por_display(df, "modelo", modelo, "Todos")
+        df_opciones = df_opciones[df_opciones["modelo"].eq(modelo)].copy()
 
-if catalogo == "DAUER":
-    mask &= filtrar_tecnico(df, "estrias_externas", estrias_externas_sel)
-    mask &= filtrar_tecnico(df, "estrias_internas", estrias_internas_sel)
-    mask &= filtrar_tecnico(df, "posicion_seguro", posicion_seguro_sel)
-    mask &= filtrar_tecnico(df, "lado", lado_sel)
+    st.divider()
+    posicion = st.selectbox("Posición", ["Todos"] + select_options(df_opciones, "posicion"))
+    lado = st.selectbox("Lado", ["Todos"] + select_options(df_opciones, "lado"))
 
-if catalogo == "REY GOMA":
-    mask &= filtrar_tecnico(df, "lado", reygoma_lado_sel)
+    buscar = st.button("Buscar", type="primary")
 
-if catalogo == "GACRI":
-    mask &= filtrar_tecnico(df, "posicion", gacri_posicion_sel)
-    mask &= filtrar_tecnico(df, "lado", gacri_lado_sel)
+# Ejecuta automáticamente si hay algún filtro usado, o si presionan buscar.
+hay_filtro = any([q, codigo, oem, catalogo != "Todos", producto != "Todos", marca != "Todas", modelo != "Todos", posicion != "Todos", lado != "Todos"])
 
-if producto == "RODAMIENTO":
-    mask &= filtrar_tecnico(df, "diametro_int_filtro", diametro_int_sel)
-    mask &= filtrar_tecnico(df, "diametro_ext_filtro", diametro_ext_sel)
-    mask &= filtrar_tecnico(df, "altura_filtro", altura_sel)
-    mask &= filtrar_tecnico(df, "abs", abs_sel)
-    mask &= filtrar_tecnico(df, "posicion", rod_posicion_sel)
-    mask &= filtrar_tecnico(df, "lado", rod_lado_sel)
+if not hay_filtro and not buscar:
+    st.info("Elegí un proveedor, código, OEM, marca/modelo o producto para buscar.")
+    st.stop()
 
-if "FUELLE" in norm(producto):
-    mask &= filtrar_tecnico(df, "boca_chica", boca_chica_sel)
-    mask &= filtrar_tecnico(df, "boca_grande", boca_grande_sel)
-    mask &= filtrar_tecnico(df, "largo", largo_sel)
-    mask &= filtrar_tecnico(df, "posicion", fuelle_posicion_sel)
-    mask &= filtrar_tecnico(df, "lado", fuelle_lado_sel)
-
-res = df[mask].copy()
-
-equivalencias_oem = pd.DataFrame(columns=df.columns)
-if buscar_equivalencias_oem and catalogo != "Todos" and not res.empty:
-    # Busca equivalencias en el dataset completo del modo actual, no sólo en el proveedor elegido.
-    df_total_modo = aplicaciones.copy() if modo == "Aplicaciones" else fichas.copy()
-    equivalencias_oem = buscar_equivalencias_por_oem(df_total_modo, res, catalogo)
+try:
+    res = query_productos(
+        fuente=catalogo,
+        q=q,
+        codigo=codigo,
+        oem=oem,
+        producto=producto,
+        marca=marca,
+        modelo=modelo,
+        posicion=posicion,
+        lado=lado,
+        limit=MAX_RESULTS,
+    )
+except Exception as e:
+    st.error(f"Error consultando Supabase: {e}")
+    st.stop()
 
 if catalogo != "Todos":
-    st.subheader(f"Resultados {catalogo}: {len(res):,}".replace(",", "."))
-    mostrar_bloque(catalogo, res, modo)
-
-    if buscar_equivalencias_oem and not equivalencias_oem.empty:
-        st.divider()
-        st.subheader(f"Equivalencias por OEM en otros proveedores: {len(equivalencias_oem):,}".replace(",", "."))
-        for fuente_eq in fuentes_disponibles(equivalencias_oem):
-            bloque_eq = equivalencias_oem[equivalencias_oem["fuente_norm"].eq(norm(fuente_eq))].copy()
-            if not bloque_eq.empty:
-                mostrar_bloque(f"Equivalencias {fuente_eq}", bloque_eq, modo)
-                st.divider()
-    elif buscar_equivalencias_oem and not res.empty:
-        st.caption("No se encontraron equivalencias por OEM en otros proveedores para esta búsqueda.")
+    mostrar_bloque(catalogo, res)
 else:
     total = len(res)
     st.subheader(f"Resultados totales: {total:,}".replace(",", "."))
-    for fuente in disponibles:
-        bloque = res[res["fuente_norm"].eq(norm(fuente))].copy()
+    for fuente in select_options(res, "fuente"):
+        bloque = res[res["fuente"].eq(fuente)].copy()
         if not bloque.empty:
-            mostrar_bloque(fuente, bloque, modo)
+            mostrar_bloque(fuente, bloque)
             st.divider()
+
+if buscar_oem and catalogo != "Todos" and not res.empty:
+    try:
+        eq = buscar_equivalencias_oem(res, catalogo)
+    except Exception as e:
+        st.warning(f"No pude buscar equivalencias OEM: {e}")
+        eq = pd.DataFrame()
+
+    if not eq.empty:
+        st.divider()
+        st.subheader(f"Equivalencias por OEM en otros proveedores: {len(eq):,}".replace(",", "."))
+        for fuente in select_options(eq, "fuente"):
+            bloque = eq[eq["fuente"].eq(fuente)].copy()
+            if not bloque.empty:
+                mostrar_bloque(f"Equivalencias {fuente}", bloque, equivalencias=True)
+                st.divider()
+    else:
+        st.caption("No se encontraron equivalencias por OEM en otros proveedores.")
 
 st.divider()
 st.markdown("""
-**Tip de uso:** la búsqueda ignora espacios, guiones y mayúsculas. Los cross/equivalencias se buscan desde Búsqueda general u OEM/referencia. Si elegís una familia técnica como RODAMIENTO o FUELLE, aparecen filtros por medidas.
+**Tip:** para equivalencias OEM, elegí un proveedor concreto y buscá por código.  
+Ejemplo: Proveedor **REY GOMA** + Código **1216**.
 """)
