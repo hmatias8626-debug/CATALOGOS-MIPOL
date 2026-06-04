@@ -306,6 +306,13 @@ def split_oem_norm_cell(txt: str) -> set[str]:
 
         # OEM alfanumérico: debe tener números y letras.
         # Ej: 96FX3290AA, 25C63280LB.
+        # Evitamos motores/versiones como 20DURATEC, 16V, 18TD, etc.
+        if any(x in n for x in ["DURATEC", "TURBO", "DIESEL", "NAFTA", "MOTOR", "VALVULAS"]):
+            continue
+        if re.fullmatch(r"\d{1,2}V", n):
+            continue
+        if re.fullmatch(r"\d{1,2}(TD|TDI|HDI|MPI|V|I|L)", n):
+            continue
         tiene_letra = bool(re.search(r"[A-Z]", n))
         tiene_numero = bool(re.search(r"\d", n))
         if tiene_letra and tiene_numero and len(n) >= 6:
@@ -481,10 +488,17 @@ with st.sidebar:
     lado = st.selectbox("Lado", ["Todos"] + select_options(df_opciones, "lado"))
 
     # Filtros técnicos dinámicos
+    # Se activan por producto elegido o por las familias disponibles del proveedor seleccionado.
     prod_norm = norm(producto)
-    fams_actuales = " ".join(select_options(df_opciones, "familia")[:20])
-    es_rodamiento = producto != "Todos" and "RODAMIENTO" in prod_norm
-    es_homocinetica = producto != "Todos" and any(x in prod_norm for x in ["HOMOCINETICA", "SEMIEJE", "CARDAN", "EJE"])
+    familias_norm = " ".join(norm(x) for x in select_options(df_opciones, "familia"))
+    productos_norm = " ".join(norm(x) for x in select_options(df_opciones, "producto"))
+    contexto_tecnico = " ".join([prod_norm, familias_norm, productos_norm, norm(catalogo)])
+
+    es_rodamiento = "RODAMIENTO" in contexto_tecnico
+    es_homocinetica = any(x in contexto_tecnico for x in [
+        "HOMOCINETICA", "HOMOCINETICAS", "SEMIEJE", "SEMIEJES", "CARDAN", "EJECARDANICO",
+        "EJEINTERMEDIO", "JUNTASCARDANICAS"
+    ])
 
     if es_rodamiento:
         st.divider()
@@ -560,11 +574,17 @@ else:
             st.divider()
 
 if buscar_oem and catalogo != "Todos" and not res.empty:
-    try:
-        eq = buscar_equivalencias_oem(res, catalogo)
-    except Exception as e:
-        st.warning(f"No pude buscar equivalencias OEM: {e}")
+    # DAUER técnico no trae OEM real. Si lo dejamos cruzar, toma motores/medidas como falsas equivalencias.
+    proveedores_sin_oem_real = {"DAUER"}
+    if norm(catalogo) in {norm(x) for x in proveedores_sin_oem_real}:
         eq = pd.DataFrame()
+        st.caption("Este proveedor no trae OEM real en los datos cargados, por eso no se buscan equivalencias OEM.")
+    else:
+        try:
+            eq = buscar_equivalencias_oem(res, catalogo)
+        except Exception as e:
+            st.warning(f"No pude buscar equivalencias OEM: {e}")
+            eq = pd.DataFrame()
 
     if not eq.empty:
         st.divider()
