@@ -129,7 +129,7 @@ def supabase_get(params: dict, start: int = 0, end: int = PAGE_SIZE - 1):
         raise RuntimeError(f"Supabase error {r.status_code}: {r.text[:500]}")
     return r.json(), r.headers.get("content-range", "")
 
-@st.cache_data(ttl=3600, show_spinner="Cargando filtros desde Supabase...")
+@st.cache_data(ttl=120, show_spinner="Cargando filtros desde Supabase...")
 def load_filter_cache():
     """Carga columnas livianas para armar filtros. No carga imágenes ni textos largos."""
     if not supabase_ready():
@@ -474,6 +474,10 @@ filtros_df = load_filter_cache()
 
 with st.sidebar:
     st.header("Filtros")
+
+    if st.button("Actualizar filtros", help="Usalo después de cargar datos nuevos en Supabase."):
+        st.cache_data.clear()
+        st.rerun()
 
     proveedores = ["Todos"] + select_options(filtros_df, "fuente")
     catalogo = st.radio("Proveedor", proveedores, horizontal=False)
