@@ -121,66 +121,6 @@ def producto_serrat_desde_row(row) -> str:
         return "FUELLE SUSPENSIÓN"
     return "FUELLE"
 
-
-def producto_gacri_desde_texto(txt: str) -> str:
-    """Normaliza productos GACRI para filtros útiles."""
-    n = norm(txt)
-    if "JUEGO" in n:
-        return "JUEGO SOPORTES"
-    if "CRAPODINA" in n:
-        return "CRAPODINA"
-    if "AMORTIGUADOR" in n and "SOPORTE" in n:
-        return "SOPORTE AMORTIGUADOR"
-    if "TOPE" in n and "AMORTIGUADOR" in n:
-        return "TOPE AMORTIGUADOR"
-    if "CAJA" in n or "VELOCIDAD" in n:
-        return "SOPORTE CAJA"
-    if "MOTOR" in n:
-        return "SOPORTE MOTOR"
-    if "BARRA" in n and ("ESTABILIZADORA" in n or "ESTABLIZADORA" in n):
-        return "BUJE BARRA ESTABILIZADORA"
-    if "PARRILLA" in n:
-        return "BUJE PARRILLA"
-    if "BUJE" in n:
-        return "BUJE"
-    if "SOPORTE" in n:
-        return "SOPORTE"
-    return limpiar(txt).upper() or "SOPORTE"
-
-
-def posicion_gacri_desde_texto(txt: str) -> str:
-    n = norm(txt)
-    vals = []
-    if "DELANTER" in n:
-        vals.append("DELANTERO")
-    if "TRASER" in n:
-        vals.append("TRASERO")
-    if "SUPERIOR" in n:
-        vals.append("SUPERIOR")
-    if "INFERIOR" in n:
-        vals.append("INFERIOR")
-    if "CENTRAL" in n or "CENTRO" in n:
-        vals.append("CENTRAL")
-    # Si es soporte de motor/caja y no hay otra posición, se usa esa como posición técnica.
-    if not vals:
-        if "MOTOR" in n:
-            vals.append("MOTOR")
-        elif "CAJA" in n or "VELOCIDAD" in n:
-            vals.append("CAJA")
-        elif "AMORTIGUADOR" in n:
-            vals.append("AMORTIGUADOR")
-    return " / ".join(dict.fromkeys(vals))
-
-
-def lado_gacri_desde_texto(txt: str) -> str:
-    n = norm(txt)
-    vals = []
-    if "DERECH" in n:
-        vals.append("DERECHO")
-    if "IZQUIERD" in n:
-        vals.append("IZQUIERDO")
-    return " / ".join(dict.fromkeys(vals))
-
 def familia_producto(txt: str) -> str:
     t = limpiar(txt).upper()
     tn = norm(t)
@@ -212,6 +152,17 @@ def familia_producto(txt: str) -> str:
         ("ACCESORIOS", ["ACCESORIOS"]),
         ("KITS", ["KITS", "KIT"]),
 
+
+        # GACRI / soportes
+        ("SOPORTE MOTOR", ["SOPORTEMOTOR", "SOPORTEDEMOTOR", "TACOMOTOR"]),
+        ("SOPORTE CAJA", ["SOPORTECAJA", "SOPORTEDECAJA", "CAJADEVELOCIDAD"]),
+        ("SOPORTE AMORTIGUADOR", ["SOPORTEAMORTIGUADOR", "CAZOLETA"]),
+        ("BUJE BARRA ESTABILIZADORA", ["BUJEBARRAESTABILIZADORA", "BARRAESTABILIZADORA"]),
+        ("BUJE PARRILLA", ["BUJEPARRILLA", "BUJEDEPARRILLA"]),
+        ("CRAPODINA", ["CRAPODINA"]),
+        ("TOPE AMORTIGUADOR", ["TOPEAMORTIGUADOR"]),
+        ("MANCHÓN", ["MANCHON"]),
+        ("PASA CABLE", ["PASACABLE"]),
 
         # DAYCO
         ("CORREA POLY-V", ["POLYV", "POLY V"]),
@@ -263,16 +214,16 @@ def read_csv_if_exists(filename: str, columns: list[str], fuente: str) -> pd.Dat
 @st.cache_data(show_spinner="Cargando catálogo MIPOL...")
 def load_data():
     app_cols = [
-        "codigo", "producto", "marca", "modelo", "anio", "info", "oem", "descripcion",
+        "codigo", "producto", "marca", "modelo", "anio", "info", "oem",
+        "descripcion", "info_original", "version_motor",
         "ficha_medidas", "ficha_oem", "ficha_info",
-        "imagen_producto", "imagen", "url_ficha", "fuente", "titulo", "categoria",
-        "familia", "modelo_original", "pagina_pdf",
+        "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
     ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
 
     ficha_cols = [
-        "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem", "descripcion",
-        "ficha_medidas", "imagen_producto", "imagen", "url_ficha", "fuente", "titulo", "categoria",
-        "familia", "modelo_original", "pagina_pdf",
+        "codigo", "producto", "ficha_anio", "ficha_info", "ficha_oem",
+        "descripcion", "info_original", "version_motor",
+        "ficha_medidas", "imagen_producto", "url_ficha", "fuente", "titulo", "categoria",
     ] + TECNICAS + AUX_TECNICAS + DAYCO_COLS
 
     aplicaciones_lista = []
@@ -320,23 +271,10 @@ def load_data():
                 if mask_reygoma.any():
                     df.loc[mask_reygoma, "familia"] = df.loc[mask_reygoma, "producto"]
 
-                # GACRI: separar producto/familia, posición y lado usando descripción.
+                # GACRI: el producto ya viene normalizado desde el extractor v3.
                 mask_gacri = df["fuente"].map(norm).eq("GACRI")
                 if mask_gacri.any():
-                    texto_gacri = (
-                        df.loc[mask_gacri, "descripcion"].astype(str) + " " +
-                        df.loc[mask_gacri, "producto"].astype(str) + " " +
-                        df.loc[mask_gacri, "posicion"].astype(str) + " " +
-                        df.loc[mask_gacri, "lado"].astype(str)
-                    )
-                    df.loc[mask_gacri, "producto"] = texto_gacri.apply(producto_gacri_desde_texto)
                     df.loc[mask_gacri, "familia"] = df.loc[mask_gacri, "producto"]
-                    pos_calc = texto_gacri.apply(posicion_gacri_desde_texto)
-                    lado_calc = texto_gacri.apply(lado_gacri_desde_texto)
-                    df.loc[mask_gacri & df["posicion"].eq(""), "posicion"] = pos_calc[df.loc[mask_gacri, "posicion"].eq("")].values
-                    df.loc[mask_gacri & df["lado"].eq(""), "lado"] = lado_calc[df.loc[mask_gacri, "lado"].eq("")].values
-                    if "imagen" in df.columns and "imagen_producto" in df.columns:
-                        df.loc[mask_gacri & df["imagen_producto"].eq(""), "imagen_producto"] = df.loc[mask_gacri & df["imagen_producto"].eq(""), "imagen"]
 
         for col in ["fuente", "familia", "marca", "modelo", "codigo"]:
             if col in df.columns:
@@ -443,8 +381,9 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
             ]
         elif es_gacri:
             cols = [
-                "fuente", "codigo", "producto", "marca", "modelo", "modelo_original",
-                "posicion", "lado", "oem", "descripcion", "imagen_producto", "url_ficha", "pagina_pdf"
+                "fuente", "codigo", "producto", "marca", "modelo", "version_motor",
+                "posicion", "lado", "oem", "descripcion", "info_original",
+                "imagen_producto", "url_ficha"
             ]
         elif es_dayco:
             cols = [
@@ -465,8 +404,9 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
             ]
         elif es_gacri:
             cols = [
-                "fuente", "codigo", "producto", "marca", "modelo", "modelo_original",
-                "posicion", "lado", "oem", "descripcion", "imagen_producto", "url_ficha", "pagina_pdf"
+                "fuente", "codigo", "producto", "marca", "modelo", "version_motor",
+                "posicion", "lado", "oem", "descripcion", "info_original",
+                "imagen_producto", "url_ficha"
             ]
         elif es_dauer or es_cilbrake or es_serrat or es_reygoma:
             cols = [
@@ -486,6 +426,15 @@ def preparar_columnas(res: pd.DataFrame, modo: str) -> pd.DataFrame:
         rename["info"] = "Motor"
     if es_serrat and "info" in out.columns:
         rename["info"] = "Vehículo"
+    if es_gacri:
+        rename.update({
+            "version_motor": "Versión / motor",
+            "posicion": "Posición",
+            "lado": "Lado",
+            "descripcion": "Descripción",
+            "info_original": "Texto original OCR",
+            "oem": "OEM",
+        })
     return out.rename(columns=rename)
 
 def mostrar_bloque(titulo: str, df: pd.DataFrame, modo: str):
@@ -598,7 +547,7 @@ with st.sidebar:
     else:
         reygoma_lado_sel = "Todos"
 
-    # Filtros técnicos de GACRI: producto, posición y lado vienen separados.
+    # Filtros técnicos de GACRI: posición y lado.
     if catalogo == "GACRI":
         st.divider()
         st.subheader("Ubicación GACRI")
@@ -695,12 +644,12 @@ if q:
     if modo == "Aplicaciones":
         mask &= text_search(df, q, [
             "codigo", "producto", "familia", "marca", "modelo", "anio",
-            "info", "oem", "descripcion", "modelo_original", "ficha_medidas", "ficha_oem", "ficha_info", "fuente",
+            "info", "oem", "descripcion", "info_original", "version_motor", "ficha_medidas", "ficha_oem", "ficha_info", "fuente",
         ] + search_cols_tecnicas)
     else:
         mask &= text_search(df, q, [
             "codigo", "producto", "familia", "ficha_anio",
-            "ficha_info", "ficha_oem", "ficha_medidas", "descripcion", "modelo_original", "fuente",
+            "ficha_info", "ficha_oem", "ficha_medidas", "fuente",
         ] + search_cols_tecnicas)
 
 if codigo:
