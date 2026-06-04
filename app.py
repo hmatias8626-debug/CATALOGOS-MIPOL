@@ -261,12 +261,11 @@ def query_productos(**kwargs):
     return query_productos_cached(tuple(sorted(params.items())))
 
 
-def split_oem_norm_cell(txt: str) -> set[str]:
-    """Toma oem_norm, pero descarta basura generada desde descripción/info.
-    Ej válido:
-      '90495169 | 93201397' -> {'90495169', '93201397'}
-    Ej inválido:
-      'SOPORTEDEMOTOR' -> descartado
+
+def split_oem_tokens_reales(txt: str) -> set[str]:
+    """Extrae sólo OEM reales desde columnas OEM confiables.
+    Se usa para columnas: oem, ficha_oem y oem_norm.
+    No se usa info ni descripción para evitar falsos positivos.
     """
     txt = str(txt or "")
     out = set()
@@ -281,65 +280,75 @@ def split_oem_norm_cell(txt: str) -> set[str]:
     }
 
     for p in re.split(r"[|,;/\n\r]+", txt):
-        n = normalizar_oem_token(p)
-        if not n:
-            continue
+        p = re.sub(r"\b(ORIGINAL|OEM|NRO|N°|REF|REFERENCIA|CODIGO|CÓDIGO)\b\s*:?", " ", p, flags=re.I)
+        candidatos = re.findall(r"[A-Z0-9]+(?:[\s\.\-]+[A-Z0-9]+)+|[A-Z0-9]{5,}", p.upper())
 
-        # Descartar palabras de producto o ubicación.
-        if n in basura:
-            continue
-
-        # Descartar tokens compuestos de palabras comunes.
-        if any(b in n for b in [
-            "SOPORTE", "BUJE", "MOTOR", "DERECHO", "IZQUIERDO",
-            "DELANTERO", "TRASERO", "HIDRAULICO", "AMORTIGUADOR"
-        ]):
-            continue
-
-        # OEM numérico: mínimo 6 dígitos.
-        if n.isdigit():
-            if len(n) < 6:
+        for c in candidatos:
+            n = normalizar_oem_token(c)
+            if not n or len(n) < 5:
                 continue
-            out.add(n)
-            out.add(n.lstrip("0") or n)
-            continue
 
-        # OEM alfanumérico: debe tener números y letras.
-        # Ej: 96FX3290AA, 25C63280LB.
-        # Evitamos motores/versiones como 20DURATEC, 16V, 18TD, etc.
-        if any(x in n for x in ["DURATEC", "TURBO", "DIESEL", "NAFTA", "MOTOR", "VALVULAS"]):
-            continue
-        if re.fullmatch(r"\d{1,2}V", n):
-            continue
-        if re.fullmatch(r"\d{1,2}(TD|TDI|HDI|MPI|V|I|L)", n):
-            continue
-        tiene_letra = bool(re.search(r"[A-Z]", n))
-        tiene_numero = bool(re.search(r"\d", n))
-        if tiene_letra and tiene_numero and len(n) >= 6:
-            out.add(n)
+            if n in basura:
+                continue
+
+            if any(x in n for x in [
+                "SOPORTE", "BUJE", "MOTOR", "DERECHO", "IZQUIERDO",
+                "DELANTERO", "TRASERO", "HIDRAULICO", "AMORTIGUADOR",
+                "DURATEC", "TURBO", "DIESEL", "NAFTA", "VALVULAS"
+            ]):
+                continue
+
+            if re.fullmatch(r"\d{1,2}V", n):
+                continue
+            if re.fullmatch(r"\d{1,2}(TD|TDI|HDI|MPI|V|I|L)", n):
+                continue
+
+            # OEM numérico: mínimo 6 dígitos.
+            if n.isdigit():
+                if len(n) < 6:
+                    continue
+                out.add(n)
+                out.add(n.lstrip("0") or n)
+                continue
+
+            # OEM alfanumérico: letras + números.
+            if re.search(r"[A-Z]", n) and re.search(r"\d", n) and len(n) >= 6:
+                out.add(n)
 
     return out
 
+def extraer_oem_tokens_fila(row: pd.Series) -> set[str]:
+    """Usa sólo columnas confiables para equivalencias OEM."""
+    tokens = set()
+    for col in ["oem_norm", "oem", "ficha_oem"]:
+        if col in row.index:
+            tokens |= split_oem_tokens_reales(row.get(col, ""))
+    return tokens
+
+
+
 def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.DataFrame:
-    """Busca equivalencias usando SOLO oem_norm, para evitar timeout.
-    Ya no escanea descripción/info porque eso genera consultas enormes.
+    """Busca equivalencias usando OEM reales desde oem_norm/oem/ficha_oem.
+    No usa info ni descripción para evitar falsos positivos.
     """
-    if res_base.empty or "oem_norm" not in res_base.columns:
+    if res_base.empty:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
     tokens = set()
     for _, row in res_base.iterrows():
-        tokens |= split_oem_norm_cell(row.get("oem_norm", ""))
+        tokens |= extraer_oem_tokens_fila(row)
 
     if not tokens:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
 
-    # Máximo razonable para evitar consultas REST gigantes
     tokens = sorted(tokens)[:20]
 
-    # Como oem_norm puede contener "90495169 | 93201397", usamos ilike por token,
-    # pero sólo sobre oem_norm y con pocos tokens.
-    partes_or = [f"oem_norm.ilike.*{t}*" for t in tokens]
+    # Buscar por oem_norm y también por oem/ficha_oem, por si algún proveedor no tiene oem_norm recalculado.
+    partes_or = []
+    for t in tokens:
+        partes_or.append(f"oem_norm.ilike.*{t}*")
+        partes_or.append(f"oem.ilike.*{t}*")
+        partes_or.append(f"ficha_oem.ilike.*{t}*")
 
     params = {
         "select": ",".join(COLUMNS),
@@ -367,7 +376,7 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
     df = df[~(df["fuente"] + "|" + df["codigo"] + "|" + df["modelo"]).isin(base_keys)].copy()
 
     def match_row(row):
-        row_tokens = split_oem_norm_cell(row.get("oem_norm", ""))
+        row_tokens = extraer_oem_tokens_fila(row)
         return " | ".join(sorted(row_tokens & set(tokens)))
 
     df["match_oem"] = df.apply(match_row, axis=1)
