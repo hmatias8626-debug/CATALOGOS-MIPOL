@@ -8,8 +8,10 @@ import streamlit as st
 st.set_page_config(page_title="Catálogo MIPOL", page_icon="🔎", layout="wide")
 
 TABLE = "mipol_productos_catalogo"
-PAGE_SIZE = 1000
-MAX_RESULTS = 1000
+PAGE_SIZE = 5000
+MAX_RESULTS = 300
+FILTER_PAGE_SIZE = 5000
+FILTER_MAX_ROWS = 30000
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
@@ -123,36 +125,73 @@ def supabase_get(params: dict, start: int = 0, end: int = PAGE_SIZE - 1):
         rest_url(),
         headers=headers({"Range": f"{start}-{end}"}),
         params=params,
-        timeout=45,
+        timeout=25,
     )
     if r.status_code >= 400:
         raise RuntimeError(f"Supabase error {r.status_code}: {r.text[:500]}")
     return r.json(), r.headers.get("content-range", "")
 
-@st.cache_data(ttl=120, show_spinner="Cargando filtros desde Supabase...")
-def load_filter_cache():
-    """Carga columnas livianas para armar filtros. No carga imágenes ni textos largos."""
+@st.cache_data(ttl=600, show_spinner=False)
+def load_proveedores_cache():
+    """Carga sólo proveedores. Mucho más liviano que traer todos los filtros al iniciar."""
     if not supabase_ready():
-        return pd.DataFrame()
+        return []
 
-    cols = "fuente,marca,modelo,familia,producto,posicion,lado,diametro_int_filtro,diametro_ext_filtro,altura_filtro,abs,estrias_externas,estrias_internas,estrias_lado_rueda,estrias_lado_caja,seguro,posicion_seguro"
     all_rows = []
     start = 0
     while True:
-        data, cr = supabase_get({"select": cols, "order": "fuente.asc"}, start, start + PAGE_SIZE - 1)
+        data, _ = supabase_get(
+            {"select": "fuente", "order": "fuente.asc"},
+            start,
+            start + FILTER_PAGE_SIZE - 1,
+        )
         if not data:
             break
         all_rows.extend(data)
-        if len(data) < PAGE_SIZE:
+        if len(data) < FILTER_PAGE_SIZE:
             break
-        start += PAGE_SIZE
-        if start > 100000:
+        start += FILTER_PAGE_SIZE
+        if start >= FILTER_MAX_ROWS:
             break
 
-    df = pd.DataFrame(all_rows).fillna("")
+    vals = [limpiar(r.get("fuente", "")) for r in all_rows if limpiar(r.get("fuente", ""))]
+    return sorted(set(vals), key=lambda x: norm(x))
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="Todos"):
+    """Carga filtros de forma perezosa según la selección actual.
+
+    Antes la app cargaba filtros de TODO el catálogo al arrancar.
+    Eso hacía lenta la app aunque la búsqueda después fuera en Supabase.
+    """
+    if not supabase_ready():
+        return pd.DataFrame()
+
+    cols = (
+        "fuente,marca,modelo,familia,producto,posicion,lado,"
+        "diametro_int_filtro,diametro_ext_filtro,altura_filtro,abs,"
+        "estrias_externas,estrias_internas,estrias_lado_rueda,estrias_lado_caja,"
+        "seguro"
+    )
+
+    params = {"select": cols, "order": "fuente.asc", "limit": str(FILTER_MAX_ROWS)}
+
+    if fuente != "Todos":
+        params["fuente"] = f"eq.{fuente}"
+    if producto != "Todos":
+        params["familia"] = f"eq.{producto}"
+    if marca != "Todas":
+        params["marca"] = f"eq.{marca}"
+    if modelo != "Todos":
+        params["modelo"] = f"eq.{modelo}"
+
+    data, _ = supabase_get(params, 0, FILTER_MAX_ROWS - 1)
+    df = pd.DataFrame(data).fillna("")
     for c in df.columns:
         df[c] = df[c].astype(str).map(limpiar)
     return df
+
 
 def select_options(df: pd.DataFrame, col: str) -> list[str]:
     if df.empty or col not in df.columns:
@@ -470,7 +509,7 @@ if not supabase_ready():
 st.title("🔎 Catálogo MIPOL")
 st.caption("Buscador interno conectado a Supabase.")
 
-filtros_df = load_filter_cache()
+proveedores_cache = load_proveedores_cache()
 
 with st.sidebar:
     st.header("Filtros")
@@ -479,34 +518,31 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-    proveedores = ["Todos"] + select_options(filtros_df, "fuente")
+    proveedores = ["Todos"] + proveedores_cache
     catalogo = st.radio("Proveedor", proveedores, horizontal=False)
 
-    df_opciones = filtros_df.copy()
-    if catalogo != "Todos":
-        df_opciones = df_opciones[df_opciones["fuente"].eq(catalogo)].copy()
-
+    # Textos primero. No disparan búsqueda hasta tocar el botón Buscar.
     q = st.text_input("Búsqueda general", placeholder="Ej: Corsa, Agile, WR110, 30003, semieje...")
     codigo = st.text_input("Código", placeholder="Ej: 4302, WR-110, KWD1072")
     oem = st.text_input("OEM / referencia", placeholder="Ej: 90495169, 22.650.18")
 
     buscar_oem = st.checkbox(
         "Mostrar equivalencias por OEM en otros proveedores",
-        value=True,
-        help="Funciona mejor eligiendo un proveedor concreto. Normaliza 2265018 = 22.650.18 = 22 65 01 8.",
+        value=False,
+        help="Más rápido desactivado. Activarlo sólo cuando ya encontraste el producto base.",
     )
 
+    # Filtros perezosos: se cargan según proveedor/producto/marca/modelo.
+    df_opciones = load_filter_cache(catalogo)
+
     producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"))
-    if producto != "Todos":
-        df_opciones = df_opciones[df_opciones["familia"].eq(producto)].copy()
+    df_opciones = load_filter_cache(catalogo, producto)
 
     marca = st.selectbox("Marca vehículo", ["Todas"] + select_options(df_opciones, "marca"))
-    if marca != "Todas":
-        df_opciones = df_opciones[df_opciones["marca"].eq(marca)].copy()
+    df_opciones = load_filter_cache(catalogo, producto, marca)
 
     modelo = st.selectbox("Modelo", ["Todos"] + select_options(df_opciones, "modelo"))
-    if modelo != "Todos":
-        df_opciones = df_opciones[df_opciones["modelo"].eq(modelo)].copy()
+    df_opciones = load_filter_cache(catalogo, producto, marca, modelo)
 
     st.divider()
     posicion = st.selectbox("Posición", ["Todos"] + select_options(df_opciones, "posicion"))
@@ -551,7 +587,8 @@ with st.sidebar:
 
     buscar = st.button("Buscar", type="primary")
 
-# Ejecuta automáticamente si hay algún filtro usado, o si presionan buscar.
+# IMPORTANTE: no buscar automáticamente.
+# Streamlit recarga la app con cada cambio de filtro; si consultamos en cada recarga, se pone lenta.
 hay_filtro = any([
     q, codigo, oem, catalogo != "Todos", producto != "Todos", marca != "Todas",
     modelo != "Todos", posicion != "Todos", lado != "Todos",
@@ -559,7 +596,11 @@ hay_filtro = any([
     estrias_ext != "Todos", estrias_int != "Todos", seguro != "Todos"
 ])
 
-if not hay_filtro and not buscar:
+if not buscar:
+    st.info("Elegí los filtros y tocá **Buscar**. Así evitamos consultar Supabase en cada tecla o cambio.")
+    st.stop()
+
+if not hay_filtro:
     st.info("Elegí un proveedor, código, OEM, marca/modelo o producto para buscar.")
     st.stop()
 
@@ -586,6 +627,9 @@ try:
 except Exception as e:
     st.error(f"Error consultando Supabase: {e}")
     st.stop()
+
+if len(res) >= MAX_RESULTS:
+    st.warning(f"Se muestran los primeros {MAX_RESULTS} resultados. Afiná la búsqueda para ver menos y más rápido.")
 
 if catalogo != "Todos":
     mostrar_bloque(catalogo, res)
