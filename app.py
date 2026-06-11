@@ -11,7 +11,7 @@ TABLE = "mipol_productos_catalogo"
 PAGE_SIZE = 5000
 MAX_RESULTS = 300
 FILTER_PAGE_SIZE = 5000
-FILTER_MAX_ROWS = 30000
+FILTER_MAX_ROWS = 300000
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
@@ -175,7 +175,7 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
         "seguro"
     )
 
-    params = {"select": cols, "order": "fuente.asc", "limit": str(FILTER_MAX_ROWS)}
+    params = {"select": cols, "order": "fuente.asc"}
 
     if fuente != "Todos":
         params["fuente"] = f"eq.{fuente}"
@@ -186,8 +186,23 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
     if modelo != "Todos":
         params["modelo"] = f"eq.{modelo}"
 
-    data, _ = supabase_get(params, 0, FILTER_MAX_ROWS - 1)
-    df = pd.DataFrame(data).fillna("")
+    # OJO: la versión anterior cortaba en 30.000 filas.
+    # Como la tabla estaba ordenada por fuente, si CILBRAKE tenía muchas filas,
+    # el cache de filtros se quedaba sólo con CILBRAKE y por eso desaparecían marcas/proveedores.
+    all_rows = []
+    start = 0
+    while True:
+        data, _ = supabase_get(params, start, start + FILTER_PAGE_SIZE - 1)
+        if not data:
+            break
+        all_rows.extend(data)
+        if len(data) < FILTER_PAGE_SIZE:
+            break
+        start += FILTER_PAGE_SIZE
+        if start >= FILTER_MAX_ROWS:
+            break
+
+    df = pd.DataFrame(all_rows).fillna("")
     for c in df.columns:
         df[c] = df[c].astype(str).map(limpiar)
     return df
