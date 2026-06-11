@@ -10,7 +10,7 @@ st.set_page_config(page_title="Catálogo MIPOL", page_icon="🔎", layout="wide"
 TABLE = "mipol_productos_catalogo"
 PAGE_SIZE = 5000
 MAX_RESULTS = 300
-FILTER_PAGE_SIZE = 5000
+FILTER_PAGE_SIZE = 1000
 FILTER_MAX_ROWS = 300000
 
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "").rstrip("/")
