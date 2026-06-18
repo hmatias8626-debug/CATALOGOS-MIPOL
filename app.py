@@ -1,3 +1,4 @@
+
 import re
 import math
 import requests
@@ -9,6 +10,7 @@ st.set_page_config(page_title="Catálogo MIPOL", page_icon="🔎", layout="wide"
 TABLE = "mipol_productos_catalogo"
 PAGE_SIZE = 5000
 MAX_RESULTS = 300
+PAGE_DISPLAY = 50
 FILTER_PAGE_SIZE = 1000
 FILTER_MAX_ROWS = 300000
 
@@ -136,7 +138,7 @@ def supabase_get(params: dict, start: int = 0, end: int = PAGE_SIZE - 1):
         raise RuntimeError(f"Supabase error {r.status_code}: {r.text[:500]}")
     return r.json(), r.headers.get("content-range", "")
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner="Cargando proveedores...")
 def load_proveedores_cache():
     """Carga sólo proveedores. Mucho más liviano que traer todos los filtros al iniciar."""
     if not supabase_ready():
@@ -163,19 +165,17 @@ def load_proveedores_cache():
     return sorted(set(vals), key=lambda x: norm(x))
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner="Cargando filtros...")
 def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="Todos"):
-    """Carga filtros de forma perezosa según la selección actual."""
+    """Carga opciones base para los selectboxes principales (sin columnas técnicas).
+    Las columnas técnicas se cargan aparte con load_column_options, que aplica
+    los filtros completos y devuelve sets pequeños.
+    """
     if not supabase_ready():
         return pd.DataFrame()
 
-    cols = (
-        "fuente,marca,modelo,familia,producto,posicion,lado,"
-        "diametro_int_filtro,diametro_ext_filtro,altura_filtro,abs,"
-        "estrias_externas,estrias_internas,estrias_lado_rueda,estrias_lado_caja,"
-        "seguro,"
-        "boca_chica,boca_grande,largo,categoria"
-    )
+    # Solo columnas base: 7 en vez de 21 → ~3x menos datos por request.
+    cols = "fuente,marca,modelo,familia,producto,posicion,lado"
 
     params = {"select": cols, "order": "fuente.asc"}
 
@@ -188,6 +188,9 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
     if modelo != "Todos":
         params["modelo"] = f"eq.{modelo}"
 
+    # OJO: la versión anterior cortaba en 30.000 filas.
+    # Como la tabla estaba ordenada por fuente, si CILBRAKE tenía muchas filas,
+    # el cache de filtros se quedaba sólo con CILBRAKE y por eso desaparecían marcas/proveedores.
     all_rows = []
     start = 0
     while True:
@@ -212,6 +215,28 @@ def select_options(df: pd.DataFrame, col: str) -> list[str]:
         return []
     vals = [limpiar(v) for v in df[col].dropna().astype(str).unique() if limpiar(v)]
     return sorted(set(vals), key=lambda x: norm(x))
+
+@st.cache_data(ttl=600, show_spinner="Cargando opciones...")
+def load_column_options(col: str, fuente="Todos", producto="Todos", marca="Todas", modelo="Todos") -> list[str]:
+    """Obtiene valores únicos de una sola columna con filtros aplicados.
+    Se usa para filtros técnicos (rodamiento, homocinética, fuelle) donde el
+    resultado ya está acotado por familia + proveedor → sets pequeños, 1 request.
+    """
+    if not supabase_ready():
+        return []
+    params = {"select": col, "order": f"{col}.asc"}
+    if fuente != "Todos":
+        params["fuente"] = f"eq.{fuente}"
+    if producto != "Todos":
+        params["familia"] = f"eq.{producto}"
+    if marca != "Todas":
+        params["marca"] = f"eq.{marca}"
+    if modelo != "Todos":
+        params["modelo"] = f"eq.{modelo}"
+    data, _ = supabase_get(params, 0, 4999)
+    vals = {limpiar(r.get(col, "")) for r in data}
+    vals.discard("")
+    return sorted(vals, key=lambda x: norm(x))
 
 def build_query_params(
     fuente: str,
@@ -422,6 +447,7 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
     # Evitar query enorme.
     tokens = sorted(tokens)[:20]
 
+    # IMPORTANTE:
     # Buscamos sólo en oem_norm. Esa columna está normalizada e indexada.
     # No buscar en oem ni ficha_oem porque provoca statement timeout.
     partes_or = [f"oem_norm.ilike.*{t}*" for t in tokens]
@@ -513,28 +539,55 @@ def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
 
 def mostrar_bloque(titulo: str, df: pd.DataFrame, equivalencias=False):
     st.markdown(f"### {titulo}")
-    st.caption(f"Resultados: {len(df):,}".replace(",", "."))
+    total = len(df)
     if df.empty:
         st.info("No hay resultados para esta selección.")
         return
 
-    codigos = "\n".join(df["codigo"].dropna().astype(str).drop_duplicates().tolist())
-    col_codigos, col_csv = st.columns([3, 1])
-    with col_codigos:
+    # Paginación
+    safe_key = re.sub(r"[^a-zA-Z0-9]", "_", titulo) + ("_eq" if equivalencias else "")
+    page_key = f"pag_{safe_key}"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+    total_pages = max(1, math.ceil(total / PAGE_DISPLAY))
+    page = min(st.session_state[page_key], total_pages - 1)
+    st.session_state[page_key] = page
+    start_idx = page * PAGE_DISPLAY
+    end_idx = min(start_idx + PAGE_DISPLAY, total)
+    df_page = df.iloc[start_idx:end_idx]
+
+    # Fila de controles: códigos | CSV | navegación
+    c1, c2, c3 = st.columns([2, 1, 2])
+    with c1:
+        codigos = "\n".join(df["codigo"].dropna().astype(str).drop_duplicates().tolist())
+        st.caption(f"Resultados: {total:,}".replace(",", "."))
         with st.expander("Copiar códigos", expanded=False):
-            st.text_area("Códigos encontrados", codigos, height=120, key=f"codigos_{titulo}_{equivalencias}")
-    with col_csv:
+            st.text_area("Códigos encontrados", codigos, height=100, key=f"cod_{safe_key}")
+    with c2:
         csv_bytes = preparar_columnas(df, equivalencias=equivalencias).to_csv(index=False).encode("utf-8")
         st.download_button(
             label="Descargar CSV",
             data=csv_bytes,
             file_name=f"{titulo.replace(' ', '_')}.csv",
             mime="text/csv",
-            key=f"csv_{titulo}_{equivalencias}",
+            key=f"csv_{safe_key}",
         )
+    with c3:
+        if total_pages > 1:
+            pc1, pc2, pc3 = st.columns([1, 2, 1])
+            with pc1:
+                if page > 0 and st.button("← Ant.", key=f"prev_{safe_key}"):
+                    st.session_state[page_key] = page - 1
+                    st.rerun()
+            with pc2:
+                st.caption(f"Pág. {page + 1} / {total_pages}  ({start_idx + 1}–{end_idx})")
+            with pc3:
+                if page < total_pages - 1 and st.button("Sig. →", key=f"next_{safe_key}"):
+                    st.session_state[page_key] = page + 1
+                    st.rerun()
 
     st.dataframe(
-        preparar_columnas(df, equivalencias=equivalencias),
+        preparar_columnas(df_page, equivalencias=equivalencias),
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -613,10 +666,10 @@ with st.sidebar:
     if es_rodamiento:
         st.divider()
         st.subheader("Medidas rodamiento")
-        diametro_int = st.selectbox("Ø interior", ["Todos"] + select_options(df_opciones, "diametro_int_filtro"))
-        diametro_ext = st.selectbox("Ø exterior", ["Todos"] + select_options(df_opciones, "diametro_ext_filtro"))
-        altura = st.selectbox("Altura", ["Todos"] + select_options(df_opciones, "altura_filtro"))
-        abs_sel = st.selectbox("ABS", ["Todos"] + select_options(df_opciones, "abs"))
+        diametro_int = st.selectbox("Ø interior", ["Todos"] + load_column_options("diametro_int_filtro", catalogo, producto, marca, modelo))
+        diametro_ext = st.selectbox("Ø exterior", ["Todos"] + load_column_options("diametro_ext_filtro", catalogo, producto, marca, modelo))
+        altura = st.selectbox("Altura", ["Todos"] + load_column_options("altura_filtro", catalogo, producto, marca, modelo))
+        abs_sel = st.selectbox("ABS", ["Todos"] + load_column_options("abs", catalogo, producto, marca, modelo))
     else:
         diametro_int = "Todos"
         diametro_ext = "Todos"
@@ -626,9 +679,9 @@ with st.sidebar:
     if es_homocinetica:
         st.divider()
         st.subheader("Medidas homocinética / semieje")
-        estrias_ext = st.selectbox("Estrías externas", ["Todos"] + select_options(df_opciones, "estrias_externas"))
-        estrias_int = st.selectbox("Estrías internas", ["Todos"] + select_options(df_opciones, "estrias_internas"))
-        seguro = st.selectbox("Seguro", ["Todos"] + select_options(df_opciones, "seguro"))
+        estrias_ext = st.selectbox("Estrías externas", ["Todos"] + load_column_options("estrias_externas", catalogo, producto, marca, modelo))
+        estrias_int = st.selectbox("Estrías internas", ["Todos"] + load_column_options("estrias_internas", catalogo, producto, marca, modelo))
+        seguro = st.selectbox("Seguro", ["Todos"] + load_column_options("seguro", catalogo, producto, marca, modelo))
     else:
         estrias_ext = "Todos"
         estrias_int = "Todos"
@@ -637,10 +690,10 @@ with st.sidebar:
     if es_fuelle:
         st.divider()
         st.subheader("Medidas fuelle")
-        categoria_fuelle = st.selectbox("Categoría", ["Todos"] + select_options(df_opciones, "categoria"))
-        boca_chica = st.selectbox("Boca chica (mm)", ["Todos"] + select_options(df_opciones, "boca_chica"))
-        boca_grande = st.selectbox("Boca grande (mm)", ["Todos"] + select_options(df_opciones, "boca_grande"))
-        largo = st.selectbox("Largo (mm)", ["Todos"] + select_options(df_opciones, "largo"))
+        categoria_fuelle = st.selectbox("Categoría", ["Todos"] + load_column_options("categoria", catalogo, producto, marca, modelo))
+        boca_chica = st.selectbox("Boca chica (mm)", ["Todos"] + load_column_options("boca_chica", catalogo, producto, marca, modelo))
+        boca_grande = st.selectbox("Boca grande (mm)", ["Todos"] + load_column_options("boca_grande", catalogo, producto, marca, modelo))
+        largo = st.selectbox("Largo (mm)", ["Todos"] + load_column_options("largo", catalogo, producto, marca, modelo))
     else:
         categoria_fuelle = "Todos"
         boca_chica = "Todos"
@@ -666,6 +719,13 @@ if not buscar:
 if not hay_filtro:
     st.info("Elegí un proveedor, código, OEM, marca/modelo o producto para buscar.")
     st.stop()
+
+# Reset paginación cuando cambian los parámetros de búsqueda
+_search_sig = f"{catalogo}|{q}|{codigo}|{oem}|{producto}|{marca}|{modelo}|{posicion}|{lado}"
+if st.session_state.get("_last_search") != _search_sig:
+    for k in [k for k in st.session_state if k.startswith("pag_")]:
+        del st.session_state[k]
+    st.session_state["_last_search"] = _search_sig
 
 try:
     res = query_productos(
