@@ -758,46 +758,51 @@ except Exception as e:
 if len(res) >= MAX_RESULTS:
     st.warning(f"Se muestran los primeros {MAX_RESULTS} resultados. Afiná la búsqueda para ver menos y más rápido.")
 
-if catalogo != "Todos":
-    mostrar_bloque(catalogo, res)
-else:
-    total = len(res)
-    st.subheader(f"Resultados totales: {total:,}".replace(",", "."))
-    for fuente in select_options(res, "fuente"):
-        bloque = res[res["fuente"].eq(fuente)].copy()
-        if not bloque.empty:
-            mostrar_bloque(fuente, bloque)
-            st.divider()
-
-if buscar_oem and catalogo == "Todos":
-    st.info("Las equivalencias OEM sólo funcionan cuando elegís un proveedor concreto (no \"Todos\").")
+# Calcular equivalencias antes de armar los tabs para poder mostrar el conteo en la etiqueta
+eq = pd.DataFrame()
+oem_bloqueado = False
+oem_aviso_todos = buscar_oem and catalogo == "Todos"
 
 if buscar_oem and catalogo != "Todos" and not res.empty:
-    # DAUER técnico no trae OEM real. Si lo dejamos cruzar, toma motores/medidas como falsas equivalencias.
     proveedores_sin_oem_real = {"DAUER"}
     if norm(catalogo) in {norm(x) for x in proveedores_sin_oem_real}:
-        eq = pd.DataFrame()
-        st.caption("Este proveedor no trae OEM real en los datos cargados, por eso no se buscan equivalencias OEM.")
+        oem_bloqueado = True
     else:
         try:
             eq = buscar_equivalencias_oem(res, catalogo)
         except Exception as e:
             st.warning(f"No pude buscar equivalencias OEM: {e}")
-            eq = pd.DataFrame()
 
-    if not eq.empty:
-        st.divider()
-        st.subheader(f"Equivalencias por OEM en otros proveedores: {len(eq):,}".replace(",", "."))
+label_res = f"Resultados ({len(res)})"
+label_eq  = f"Equivalencias OEM ({len(eq)})" if not eq.empty else "Equivalencias OEM"
+
+tab_res, tab_eq = st.tabs([label_res, label_eq])
+
+with tab_res:
+    if catalogo != "Todos":
+        mostrar_bloque(catalogo, res)
+    else:
+        total = len(res)
+        st.subheader(f"Resultados totales: {total:,}".replace(",", "."))
+        for fuente in select_options(res, "fuente"):
+            bloque = res[res["fuente"].eq(fuente)].copy()
+            if not bloque.empty:
+                mostrar_bloque(fuente, bloque)
+                st.divider()
+    st.caption("**Tip:** para equivalencias OEM, elegí un proveedor concreto y buscá por código. Ejemplo: Proveedor **REY GOMA** + Código **1216**.")
+
+with tab_eq:
+    if oem_aviso_todos:
+        st.info("Las equivalencias OEM sólo funcionan cuando elegís un proveedor concreto (no \"Todos\").")
+    elif not buscar_oem:
+        st.info("Activá la opción **Mostrar equivalencias por OEM** en el panel lateral y volvé a buscar.")
+    elif oem_bloqueado:
+        st.caption("Este proveedor no trae OEM real en los datos cargados, por eso no se buscan equivalencias OEM.")
+    elif eq.empty:
+        st.caption("No se encontraron equivalencias por OEM en otros proveedores.")
+    else:
         for fuente in select_options(eq, "fuente"):
             bloque = eq[eq["fuente"].eq(fuente)].copy()
             if not bloque.empty:
                 mostrar_bloque(f"Equivalencias {fuente}", bloque, equivalencias=True)
                 st.divider()
-    else:
-        st.caption("No se encontraron equivalencias por OEM en otros proveedores.")
-
-st.divider()
-st.markdown("""
-**Tip:** para equivalencias OEM, elegí un proveedor concreto y buscá por código.  
-Ejemplo: Proveedor **REY GOMA** + Código **1216**.
-""")
