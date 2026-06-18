@@ -1,4 +1,3 @@
-
 import re
 import math
 import requests
@@ -32,7 +31,10 @@ COLUMNS = [
     "diametro_jh", "diametro_junta_homocinetica", "diametro_jh_deslizante",
     "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
     "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
-    "seguro", "peso", "dimensiones", "pieza"
+    "seguro", "peso", "dimensiones", "pieza",
+
+    # Medidas técnicas fuelles (SERRAT)
+    "boca_chica", "boca_grande", "largo", "categoria"
 ]
 
 DISPLAY_COLUMNS = [
@@ -51,11 +53,14 @@ DISPLAY_COLUMNS = [
     "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
     "seguro", "peso", "dimensiones",
 
+    # Fuelles (SERRAT)
+    "categoria", "boca_chica", "boca_grande", "largo",
+
     "imagen_producto", "url_ficha"
 ]
 
 def limpiar(txt: str) -> str:
-    return re.sub(r"\s+", " ", str(txt or "").replace("\ufeff", "")).strip()
+    return re.sub(r"\s+", " ", str(txt or "").replace("﻿", "")).strip()
 
 def norm(txt: str) -> str:
     txt = str(txt or "").upper()
@@ -160,11 +165,7 @@ def load_proveedores_cache():
 
 @st.cache_data(ttl=600, show_spinner=False)
 def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="Todos"):
-    """Carga filtros de forma perezosa según la selección actual.
-
-    Antes la app cargaba filtros de TODO el catálogo al arrancar.
-    Eso hacía lenta la app aunque la búsqueda después fuera en Supabase.
-    """
+    """Carga filtros de forma perezosa según la selección actual."""
     if not supabase_ready():
         return pd.DataFrame()
 
@@ -172,7 +173,8 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
         "fuente,marca,modelo,familia,producto,posicion,lado,"
         "diametro_int_filtro,diametro_ext_filtro,altura_filtro,abs,"
         "estrias_externas,estrias_internas,estrias_lado_rueda,estrias_lado_caja,"
-        "seguro"
+        "seguro,"
+        "boca_chica,boca_grande,largo,categoria"
     )
 
     params = {"select": cols, "order": "fuente.asc"}
@@ -186,9 +188,6 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
     if modelo != "Todos":
         params["modelo"] = f"eq.{modelo}"
 
-    # OJO: la versión anterior cortaba en 30.000 filas.
-    # Como la tabla estaba ordenada por fuente, si CILBRAKE tenía muchas filas,
-    # el cache de filtros se quedaba sólo con CILBRAKE y por eso desaparecían marcas/proveedores.
     all_rows = []
     start = 0
     while True:
@@ -231,6 +230,10 @@ def build_query_params(
     estrias_ext: str = "Todos",
     estrias_int: str = "Todos",
     seguro: str = "Todos",
+    boca_chica: str = "Todos",
+    boca_grande: str = "Todos",
+    largo: str = "Todos",
+    categoria: str = "Todos",
     limit: int = MAX_RESULTS,
 ):
     params = {
@@ -277,17 +280,37 @@ def build_query_params(
     if seguro != "Todos":
         params["seguro"] = f"eq.{seguro}"
 
+    # Filtros técnicos fuelles
+    if boca_chica != "Todos":
+        params["boca_chica"] = f"eq.{boca_chica}"
+    if boca_grande != "Todos":
+        params["boca_grande"] = f"eq.{boca_grande}"
+    if largo != "Todos":
+        params["largo"] = f"eq.{largo}"
+    if categoria != "Todos":
+        params["categoria"] = f"eq.{categoria}"
+
     if codigo:
         params["codigo"] = f"ilike.*{codigo}*"
 
-    if oem:
-        oem_norm = normalizar_oem_token(oem)
-        if oem_norm:
-            params["or"] = f"(oem_norm.ilike.*{oem_norm}*,oem.ilike.*{oem}*,ficha_oem.ilike.*{oem}*)"
-
-    if q:
+    # Bug fix: si se usan OEM y búsqueda general juntos, el segundo `or` pisaba al primero.
+    # Ahora se combinan con `and` para que ambas condiciones se cumplan a la vez.
+    if oem and q:
+        oem_n = normalizar_oem_token(oem)
         qsafe = q.replace(",", " ").replace(")", " ").replace("(", " ")
-        # búsqueda general en columnas principales
+        oem_part = f"or(oem_norm.ilike.*{oem_n}*,oem.ilike.*{oem}*,ficha_oem.ilike.*{oem}*)"
+        q_part = (
+            f"or(codigo.ilike.*{qsafe}*,marca.ilike.*{qsafe}*,modelo.ilike.*{qsafe}*,"
+            f"producto.ilike.*{qsafe}*,familia.ilike.*{qsafe}*,descripcion.ilike.*{qsafe}*,"
+            f"info.ilike.*{qsafe}*,oem.ilike.*{qsafe}*,ficha_oem.ilike.*{qsafe}*)"
+        )
+        params["and"] = f"({oem_part},{q_part})"
+    elif oem:
+        oem_n = normalizar_oem_token(oem)
+        if oem_n:
+            params["or"] = f"(oem_norm.ilike.*{oem_n}*,oem.ilike.*{oem}*,ficha_oem.ilike.*{oem}*)"
+    elif q:
+        qsafe = q.replace(",", " ").replace(")", " ").replace("(", " ")
         params["or"] = (
             f"(codigo.ilike.*{qsafe}*,marca.ilike.*{qsafe}*,modelo.ilike.*{qsafe}*,"
             f"producto.ilike.*{qsafe}*,familia.ilike.*{qsafe}*,descripcion.ilike.*{qsafe}*,"
@@ -391,13 +414,7 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
 
     tokens = set()
     for _, row in res_base.iterrows():
-        # Para detectar OEM del producto origen sí usamos columnas confiables.
-        if "extraer_oem_tokens_fila" in globals():
-            tokens |= extraer_oem_tokens_fila(row)
-        else:
-            for col in ["oem_norm", "oem", "ficha_oem"]:
-                if col in row.index:
-                    tokens |= split_oem_tokens_reales(row.get(col, "")) if "split_oem_tokens_reales" in globals() else split_oem_norm_cell(row.get(col, ""))
+        tokens |= extraer_oem_tokens_fila(row)
 
     if not tokens:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
@@ -405,7 +422,6 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
     # Evitar query enorme.
     tokens = sorted(tokens)[:20]
 
-    # IMPORTANTE:
     # Buscamos sólo en oem_norm. Esa columna está normalizada e indexada.
     # No buscar en oem ni ficha_oem porque provoca statement timeout.
     partes_or = [f"oem_norm.ilike.*{t}*" for t in tokens]
@@ -435,12 +451,7 @@ def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.D
     df = df[~(df["fuente"] + "|" + df["codigo"] + "|" + df["modelo"]).isin(base_keys)].copy()
 
     def row_tokens_from_oem_norm(row):
-        # Para validar match también usamos sólo oem_norm del equivalente.
-        if "split_oem_norm_cell" in globals():
-            return split_oem_norm_cell(row.get("oem_norm", ""))
-        if "split_oem_tokens_reales" in globals():
-            return split_oem_tokens_reales(row.get("oem_norm", ""))
-        return set()
+        return split_oem_tokens_reales(row.get("oem_norm", ""))
 
     def match_row(row):
         row_tokens = row_tokens_from_oem_norm(row)
@@ -493,6 +504,10 @@ def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
         "lado": "Lado",
         "anio": "Año",
         "oem": "OEM",
+        "categoria": "Categoría fuelle",
+        "boca_chica": "Boca chica (mm)",
+        "boca_grande": "Boca grande (mm)",
+        "largo": "Largo (mm)",
     }
     return out.rename(columns=rename)
 
@@ -504,8 +519,19 @@ def mostrar_bloque(titulo: str, df: pd.DataFrame, equivalencias=False):
         return
 
     codigos = "\n".join(df["codigo"].dropna().astype(str).drop_duplicates().tolist())
-    with st.expander("Copiar códigos", expanded=False):
-        st.text_area("Códigos encontrados", codigos, height=120, key=f"codigos_{titulo}_{equivalencias}")
+    col_codigos, col_csv = st.columns([3, 1])
+    with col_codigos:
+        with st.expander("Copiar códigos", expanded=False):
+            st.text_area("Códigos encontrados", codigos, height=120, key=f"codigos_{titulo}_{equivalencias}")
+    with col_csv:
+        csv_bytes = preparar_columnas(df, equivalencias=equivalencias).to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Descargar CSV",
+            data=csv_bytes,
+            file_name=f"{titulo.replace(' ', '_')}.csv",
+            mime="text/csv",
+            key=f"csv_{titulo}_{equivalencias}",
+        )
 
     st.dataframe(
         preparar_columnas(df, equivalencias=equivalencias),
@@ -529,9 +555,16 @@ proveedores_cache = load_proveedores_cache()
 with st.sidebar:
     st.header("Filtros")
 
-    if st.button("Actualizar filtros", help="Usalo después de cargar datos nuevos en Supabase."):
-        st.cache_data.clear()
-        st.rerun()
+    col_act, col_lim = st.columns(2)
+    with col_act:
+        if st.button("Actualizar filtros", help="Usalo después de cargar datos nuevos en Supabase."):
+            st.cache_data.clear()
+            st.rerun()
+    with col_lim:
+        if st.button("Limpiar filtros", help="Resetea todos los filtros al estado inicial."):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
+            st.rerun()
 
     proveedores = ["Todos"] + proveedores_cache
     catalogo = st.radio("Proveedor", proveedores, horizontal=False)
@@ -575,6 +608,7 @@ with st.sidebar:
         "HOMOCINETICA", "HOMOCINETICAS", "SEMIEJE", "SEMIEJES", "CARDAN", "EJECARDANICO",
         "EJEINTERMEDIO", "JUNTASCARDANICAS"
     ])
+    es_fuelle = "FUELLE" in contexto_tecnico
 
     if es_rodamiento:
         st.divider()
@@ -600,6 +634,19 @@ with st.sidebar:
         estrias_int = "Todos"
         seguro = "Todos"
 
+    if es_fuelle:
+        st.divider()
+        st.subheader("Medidas fuelle")
+        categoria_fuelle = st.selectbox("Categoría", ["Todos"] + select_options(df_opciones, "categoria"))
+        boca_chica = st.selectbox("Boca chica (mm)", ["Todos"] + select_options(df_opciones, "boca_chica"))
+        boca_grande = st.selectbox("Boca grande (mm)", ["Todos"] + select_options(df_opciones, "boca_grande"))
+        largo = st.selectbox("Largo (mm)", ["Todos"] + select_options(df_opciones, "largo"))
+    else:
+        categoria_fuelle = "Todos"
+        boca_chica = "Todos"
+        boca_grande = "Todos"
+        largo = "Todos"
+
     buscar = st.button("Buscar", type="primary")
 
 # IMPORTANTE: no buscar automáticamente.
@@ -608,7 +655,8 @@ hay_filtro = any([
     q, codigo, oem, catalogo != "Todos", producto != "Todos", marca != "Todas",
     modelo != "Todos", posicion != "Todos", lado != "Todos",
     diametro_int != "Todos", diametro_ext != "Todos", altura != "Todos", abs_sel != "Todos",
-    estrias_ext != "Todos", estrias_int != "Todos", seguro != "Todos"
+    estrias_ext != "Todos", estrias_int != "Todos", seguro != "Todos",
+    boca_chica != "Todos", boca_grande != "Todos", largo != "Todos", categoria_fuelle != "Todos",
 ])
 
 if not buscar:
@@ -637,6 +685,10 @@ try:
         estrias_ext=estrias_ext,
         estrias_int=estrias_int,
         seguro=seguro,
+        boca_chica=boca_chica,
+        boca_grande=boca_grande,
+        largo=largo,
+        categoria=categoria_fuelle,
         limit=MAX_RESULTS,
     )
 except Exception as e:
@@ -656,6 +708,9 @@ else:
         if not bloque.empty:
             mostrar_bloque(fuente, bloque)
             st.divider()
+
+if buscar_oem and catalogo == "Todos":
+    st.info("Las equivalencias OEM sólo funcionan cuando elegís un proveedor concreto (no \"Todos\").")
 
 if buscar_oem and catalogo != "Todos" and not res.empty:
     # DAUER técnico no trae OEM real. Si lo dejamos cruzar, toma motores/medidas como falsas equivalencias.
