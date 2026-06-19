@@ -34,9 +34,6 @@ COLUMNS = [
     "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
     "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
     "seguro", "peso", "dimensiones", "pieza",
-
-    # Medidas técnicas fuelles (SERRAT)
-    "boca_chica", "boca_grande", "largo", "categoria"
 ]
 
 DISPLAY_COLUMNS = [
@@ -54,9 +51,6 @@ DISPLAY_COLUMNS = [
     "altura_jh", "altura_punta_eje", "diametro_circunferencia_agujeros",
     "rosca_agujeros", "diametro_rodamiento", "diametro_menor",
     "seguro", "peso", "dimensiones",
-
-    # Fuelles (SERRAT)
-    "categoria", "boca_chica", "boca_grande", "largo",
 
     "imagen_producto", "url_ficha"
 ]
@@ -90,10 +84,8 @@ def extraer_oem_tokens(txt: str) -> set[str]:
     txt = str(txt or "").upper()
     if not txt.strip():
         return set()
-
     tokens = set()
     partes = re.split(r"[|,;/\n\r]+", txt)
-
     for parte in partes:
         parte = re.sub(r"\b(ORIGINAL|OEM|NRO|N°|REF|REFERENCIA|CODIGO|CÓDIGO)\b\s*:?", " ", parte, flags=re.I)
         candidatos = re.findall(r"[A-Z0-9]+(?:[\s\.\-]+[A-Z0-9]+)+|[A-Z0-9]{5,}", parte)
@@ -140,10 +132,8 @@ def supabase_get(params: dict, start: int = 0, end: int = PAGE_SIZE - 1):
 
 @st.cache_data(ttl=600, show_spinner="Cargando proveedores...")
 def load_proveedores_cache():
-    """Carga sólo proveedores. Mucho más liviano que traer todos los filtros al iniciar."""
     if not supabase_ready():
         return []
-
     all_rows = []
     start = 0
     while True:
@@ -160,25 +150,16 @@ def load_proveedores_cache():
         start += FILTER_PAGE_SIZE
         if start >= FILTER_MAX_ROWS:
             break
-
     vals = [limpiar(r.get("fuente", "")) for r in all_rows if limpiar(r.get("fuente", ""))]
     return sorted(set(vals), key=lambda x: norm(x))
 
 
 @st.cache_data(ttl=600, show_spinner="Cargando filtros...")
 def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="Todos"):
-    """Carga opciones base para los selectboxes principales (sin columnas técnicas).
-    Las columnas técnicas se cargan aparte con load_column_options, que aplica
-    los filtros completos y devuelve sets pequeños.
-    """
     if not supabase_ready():
         return pd.DataFrame()
-
-    # Solo columnas base: 7 en vez de 21 → ~3x menos datos por request.
     cols = "fuente,marca,modelo,familia,producto,posicion,lado"
-
     params = {"select": cols, "order": "fuente.asc"}
-
     if fuente != "Todos":
         params["fuente"] = f"eq.{fuente}"
     if producto != "Todos":
@@ -187,7 +168,6 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
         params["marca"] = f"eq.{marca}"
     if modelo != "Todos":
         params["modelo"] = f"eq.{modelo}"
-
     all_rows = []
     start = 0
     while True:
@@ -200,7 +180,6 @@ def load_filter_cache(fuente="Todos", producto="Todos", marca="Todas", modelo="T
         start += FILTER_PAGE_SIZE
         if start >= FILTER_MAX_ROWS:
             break
-
     df = pd.DataFrame(all_rows).fillna("")
     for c in df.columns:
         df[c] = df[c].astype(str).map(limpiar)
@@ -215,10 +194,6 @@ def select_options(df: pd.DataFrame, col: str) -> list[str]:
 
 @st.cache_data(ttl=600, show_spinner="Cargando opciones...")
 def load_column_options(col: str, fuente="Todos", producto="Todos", marca="Todas", modelo="Todos") -> list[str]:
-    """Obtiene valores únicos de una sola columna con filtros aplicados.
-    Se usa para filtros técnicos (rodamiento, homocinética, fuelle) donde el
-    resultado ya está acotado por familia + proveedor → sets pequeños, 1 request.
-    """
     if not supabase_ready():
         return []
     params = {"select": col, "order": f"{col}.asc"}
@@ -267,23 +242,16 @@ def build_query_params(
         "order": "fuente.asc,codigo.asc",
     }
 
-    and_filters = []
-
     if fuente != "Todos":
         params["fuente"] = f"eq.{fuente}"
-
     if producto != "Todos":
         params["familia"] = f"eq.{producto}"
-
     if marca != "Todas":
         params["marca"] = f"eq.{marca}"
-
     if modelo != "Todos":
         params["modelo"] = f"eq.{modelo}"
-
     if posicion != "Todos":
         params["posicion"] = f"eq.{posicion}"
-
     if lado != "Todos":
         params["lado"] = f"eq.{lado}"
 
@@ -305,7 +273,7 @@ def build_query_params(
     if seguro != "Todos":
         params["seguro"] = f"eq.{seguro}"
 
-    # Filtros técnicos fuelles
+    # Filtros fuelles (solo se aplican si las columnas existen en Supabase)
     if boca_chica != "Todos":
         params["boca_chica"] = f"eq.{boca_chica}"
     if boca_grande != "Todos":
@@ -361,12 +329,9 @@ def query_productos(**kwargs):
     return query_productos_cached(tuple(sorted(params.items())))
 
 
-
 def split_oem_tokens_reales(txt: str) -> set[str]:
-    """Extrae sólo OEM reales desde columnas OEM confiables."""
     txt = str(txt or "")
     out = set()
-
     basura = {
         "SOPORTE", "SOPORTEDEMOTOR", "SOPORTEMOTOR", "SOPORTEDECAJA", "SOPORTECAJA",
         "SOPORTEAMORTIGUADOR", "BUJE", "BUJEPARRILLA", "BUJEBARRAESTABILIZADORA",
@@ -375,11 +340,9 @@ def split_oem_tokens_reales(txt: str) -> set[str]:
         "PARRILLA", "BARRA", "ESTABILIZADORA", "CRAPODINA", "TOPE",
         "MODELO", "ORIGINAL", "CODIGO", "PRODUCTO", "FAMILIA"
     }
-
     for p in re.split(r"[|,;/\n\r]+", txt):
         p = re.sub(r"\b(ORIGINAL|OEM|NRO|N°|REF|REFERENCIA|CODIGO|CÓDIGO)\b\s*:?", " ", p, flags=re.I)
         candidatos = re.findall(r"[A-Z0-9]+(?:[\s\.\-]+[A-Z0-9]+)+|[A-Z0-9]{5,}", p.upper())
-
         for c in candidatos:
             n = normalizar_oem_token(c)
             if not n or len(n) < 5:
@@ -404,11 +367,9 @@ def split_oem_tokens_reales(txt: str) -> set[str]:
                 continue
             if re.search(r"[A-Z]", n) and re.search(r"\d", n) and len(n) >= 6:
                 out.add(n)
-
     return out
 
 def extraer_oem_tokens_fila(row: pd.Series) -> set[str]:
-    """Usa sólo columnas confiables para equivalencias OEM."""
     tokens = set()
     for col in ["oem_norm", "oem", "ficha_oem"]:
         if col in row.index:
@@ -417,52 +378,39 @@ def extraer_oem_tokens_fila(row: pd.Series) -> set[str]:
 
 
 def buscar_equivalencias_oem(res_base: pd.DataFrame, fuente_actual: str) -> pd.DataFrame:
-    """Busca equivalencias usando OEM reales del resultado base."""
     if res_base.empty:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
-
     tokens = set()
     for _, row in res_base.iterrows():
         tokens |= extraer_oem_tokens_fila(row)
-
     if not tokens:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
-
     tokens = sorted(tokens)[:20]
-
     partes_or = [f"oem_norm.ilike.*{t}*" for t in tokens]
-
     params = {
         "select": ",".join(COLUMNS),
         "or": "(" + ",".join(partes_or) + ")",
         "limit": "1000",
         "order": "fuente.asc,codigo.asc",
     }
-
     data, _ = supabase_get(params, 0, 999)
     df = pd.DataFrame(data)
     if df.empty:
         return pd.DataFrame(columns=COLUMNS + ["match_oem"])
-
     for c in COLUMNS:
         if c not in df.columns:
             df[c] = ""
     for c in df.columns:
         df[c] = df[c].fillna("").astype(str).map(limpiar)
-
     if fuente_actual != "Todos":
         df = df[df["fuente"].map(norm) != norm(fuente_actual)].copy()
-
     base_keys = set((res_base["fuente"] + "|" + res_base["codigo"] + "|" + res_base["modelo"]).tolist())
     df = df[~(df["fuente"] + "|" + df["codigo"] + "|" + df["modelo"]).isin(base_keys)].copy()
-
     def row_tokens_from_oem_norm(row):
         return split_oem_tokens_reales(row.get("oem_norm", ""))
-
     def match_row(row):
         row_tokens = row_tokens_from_oem_norm(row)
         return " | ".join(sorted(row_tokens & set(tokens)))
-
     df["match_oem"] = df.apply(match_row, axis=1)
     df = df[df["match_oem"].str.strip().ne("")]
     return df.drop_duplicates()
@@ -510,10 +458,6 @@ def preparar_columnas(df: pd.DataFrame, equivalencias=False) -> pd.DataFrame:
         "lado": "Lado",
         "anio": "Año",
         "oem": "OEM",
-        "categoria": "Categoría fuelle",
-        "boca_chica": "Boca chica (mm)",
-        "boca_grande": "Boca grande (mm)",
-        "largo": "Largo (mm)",
     }
     return out.rename(columns=rename)
 
@@ -611,7 +555,6 @@ with st.sidebar:
     )
 
     df_opciones = load_filter_cache(catalogo)
-
     producto = st.selectbox("Producto", ["Todos"] + select_options(df_opciones, "familia"))
     df_opciones = load_filter_cache(catalogo, producto)
 
